@@ -1,0 +1,14 @@
+
+# --- Local DB + sqlite artifacts ---
+backend/instance/*.db
+backend/instance/*.db-wal
+backend/instance/*.db-shm
+
+# --- local curl cookie jar ---
+cookies.txt
+
+# --- local uploads/assets (optional) ---
+backend/uploads/
+backend/uploaded_docs/
+backend/receipts/
+backend/assets/
