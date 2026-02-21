@@ -18,7 +18,11 @@ export default function LoginPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({
+          slug: "abc-learning-centre",
+          username, // or email
+          password,
+        }),
       });
 
       if (!res.ok) throw new Error("Login failed");
