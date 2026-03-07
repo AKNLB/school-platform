@@ -326,3 +326,4 @@ wsproto==1.2.0
 yarl==1.18.3
 yfinance==0.2.54
 zopfli==0.2.3.post1
+gunicorn
