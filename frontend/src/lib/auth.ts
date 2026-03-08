@@ -1,4 +1,8 @@
-export type AuthedUser = { email: string; role: string } | null;
+export type AuthedUser = {
+  email?: string;
+  username?: string;
+  role: string;
+} | null;
 
 export async function fetchMe(): Promise<AuthedUser> {
   const res = await fetch("/api/auth/me", { credentials: "include" });
