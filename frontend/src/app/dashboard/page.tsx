@@ -76,7 +76,7 @@ export default function DashboardPage() {
           <h1 style={styles.heroTitle}>Dashboard</h1>
           <p style={styles.heroText}>
             Welcome back{" "}
-            <b>{user?.email || user?.username || "User"}</b>. Here’s your school
+            <b>{user?.email || "User"}</b>. Here’s your school
             control center.
           </p>
         </div>
