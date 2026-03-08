@@ -75,7 +75,8 @@ BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 UPLOAD_RESOURCES = os.path.join(BASE_DIR, "uploads", "resources")
 os.makedirs(UPLOAD_RESOURCES, exist_ok=True)
 ALLOWED_RESOURCE_TYPES = {"pdf", "doc", "docx", "txt", "xlsx", "pptx", "png", "jpg", "jpeg"}
-
+DB_DIR = os.environ.get("DB_DIR", "/data")
+os.makedirs(DB_DIR, exist_ok=True)
 app = Flask(__name__)
 
 # --- Tenancy URL support: grab <slug> from URL prefix and remove it from view args ---
@@ -86,7 +87,7 @@ app.secret_key = os.environ.get("SECRET_KEY", "dev-not-for-production")
 # This is important for correct scheme detection (https) and client IPs.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
-DEFAULT_DB = "sqlite:////app/instance/database.db"
+DEFAULT_DB = f"sqlite:///{os.path.join(DB_DIR, 'school.db')}"
 
 app.config.update(
     SQLALCHEMY_DATABASE_URI=os.environ.get("DATABASE_URL", DEFAULT_DB),
