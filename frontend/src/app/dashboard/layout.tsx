@@ -1,9 +1,25 @@
+// frontend/src/app/dashboard/layout.tsx
 "use client";
 
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import { ReactNode } from "react";
-import { useRouter } from "next/navigation";
+
+const navItems = [
+  { label: "Dashboard", href: "/dashboard", icon: "🏠" },
+  { label: "Announcements", href: "/dashboard/announcements", icon: "📢" },
+  { label: "Attendance", href: "/dashboard/attendance", icon: "🕘" },
+  { label: "Events", href: "/dashboard/events", icon: "📅" },
+  { label: "Finance", href: "/dashboard/finance", icon: "💳" },
+  { label: "Report Cards", href: "/dashboard/report-cards", icon: "🧾" },
+  { label: "Resources", href: "/dashboard/resources", icon: "📚" },
+  { label: "Scores", href: "/dashboard/scores", icon: "📊" },
+  { label: "Settings", href: "/dashboard/settings", icon: "⚙️" },
+  { label: "Tasks", href: "/dashboard/tasks", icon: "✅" },
+];
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
   const router = useRouter();
 
   async function logout() {
@@ -11,92 +27,161 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       method: "POST",
       credentials: "include",
     });
-
     router.replace("/login");
   }
 
   return (
-    <div style={styles.wrapper}>
-      {/* Sidebar */}
+    <div style={styles.appShell}>
       <aside style={styles.sidebar}>
-        <h2 style={styles.logo}>SchoolOS</h2>
+        <div>
+          <div style={styles.brandWrap}>
+            <div style={styles.brandBadge}>S</div>
+            <div>
+              <div style={styles.brandTitle}>School Platform</div>
+              <div style={styles.brandSub}>Admin Workspace</div>
+            </div>
+          </div>
 
-        <nav style={styles.nav}>
-          <NavItem label="Dashboard" path="/dashboard" />
-          <NavItem label="Announcements" path="/dashboard/announcements" />
-          <NavItem label="Resources" path="/dashboard/resources" />
-          <NavItem label="Attendance" path="/dashboard/attendance" />
-          <NavItem label="Events" path="/dashboard/events" />
-          <NavItem label="Tasks" path="/dashboard/tasks" />
-          <NavItem label="Finance" path="/dashboard/finance" />
-        </nav>
+          <nav style={styles.nav}>
+            {navItems.map((item) => {
+              const active =
+                pathname === item.href || pathname.startsWith(item.href + "/");
 
-        <button onClick={logout} style={styles.logout}>
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  style={{
+                    ...styles.navItem,
+                    ...(active ? styles.navItemActive : {}),
+                  }}
+                >
+                  <span style={styles.navIcon}>{item.icon}</span>
+                  <span>{item.label}</span>
+                </Link>
+              );
+            })}
+          </nav>
+        </div>
+
+        <button onClick={logout} style={styles.logoutBtn}>
           Logout
         </button>
       </aside>
 
-      {/* Content */}
-      <main style={styles.main}>{children}</main>
+      <section style={styles.mainArea}>
+        <header style={styles.topbar}>
+          <div>
+            <div style={styles.topbarTitle}>School Administration System</div>
+            <div style={styles.topbarSub}>
+              Manage operations, communication, records, and reporting
+            </div>
+          </div>
+        </header>
+
+        <div style={styles.pageContent}>{children}</div>
+      </section>
     </div>
   );
 }
 
-function NavItem({ label, path }: { label: string; path: string }) {
-  const router = useRouter();
-
-  return (
-    <button style={styles.navItem} onClick={() => router.push(path)}>
-      {label}
-    </button>
-  );
-}
-
-const styles = {
-  wrapper: {
+const styles: Record<string, React.CSSProperties> = {
+  appShell: {
     display: "flex",
     minHeight: "100vh",
+    background: "#f6f8fb",
   },
-
   sidebar: {
-    width: 240,
-    background: "#111827",
-    color: "white",
+    width: 260,
+    background: "#0f172a",
+    color: "#fff",
     padding: 20,
     display: "flex",
     flexDirection: "column",
+    justifyContent: "space-between",
+    borderRight: "1px solid rgba(255,255,255,0.06)",
   },
-
-  logo: {
-    marginBottom: 20,
+  brandWrap: {
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 24,
   },
-
+  brandBadge: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    background: "linear-gradient(135deg, #60a5fa, #2563eb)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontWeight: 800,
+    fontSize: 18,
+  },
+  brandTitle: {
+    fontWeight: 700,
+    fontSize: 16,
+  },
+  brandSub: {
+    fontSize: 12,
+    opacity: 0.72,
+    marginTop: 2,
+  },
   nav: {
     display: "flex",
     flexDirection: "column",
-    gap: 10,
-    flex: 1,
+    gap: 8,
   },
-
   navItem: {
-    background: "transparent",
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    textDecoration: "none",
+    color: "#cbd5e1",
+    padding: "12px 14px",
+    borderRadius: 12,
+    transition: "all 0.2s ease",
+  },
+  navItemActive: {
+    background: "#1e293b",
+    color: "#fff",
+    boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.06)",
+  },
+  navIcon: {
+    width: 22,
+    textAlign: "center",
+  },
+  logoutBtn: {
     border: "none",
-    color: "white",
-    textAlign: "left",
-    padding: "10px 12px",
+    borderRadius: 12,
+    padding: "12px 14px",
+    background: "#1e293b",
+    color: "#fff",
     cursor: "pointer",
-    borderRadius: 6,
+    fontWeight: 600,
   },
-
-  logout: {
-    marginTop: 20,
-    padding: "10px",
-    cursor: "pointer",
-  },
-
-  main: {
+  mainArea: {
     flex: 1,
-    padding: 30,
-    background: "#f4f6f9",
+    display: "flex",
+    flexDirection: "column",
+    minWidth: 0,
+  },
+  topbar: {
+    padding: "22px 28px",
+    background: "#ffffff",
+    borderBottom: "1px solid #e5e7eb",
+  },
+  topbarTitle: {
+    fontSize: 20,
+    fontWeight: 800,
+    color: "#0f172a",
+  },
+  topbarSub: {
+    marginTop: 4,
+    fontSize: 13,
+    color: "#64748b",
+  },
+  pageContent: {
+    padding: 28,
   },
 };

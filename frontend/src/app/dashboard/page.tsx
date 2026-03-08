@@ -1,125 +1,228 @@
+// frontend/src/app/dashboard/page.tsx
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { fetchMe, type AuthedUser } from "@/lib/auth";
 
+const modules = [
+  {
+    title: "Announcements",
+    href: "/dashboard/announcements",
+    desc: "Post updates for teachers, parents, and students.",
+    icon: "📢",
+  },
+  {
+    title: "Attendance",
+    href: "/dashboard/attendance",
+    desc: "Track and review student attendance records.",
+    icon: "🕘",
+  },
+  {
+    title: "Events",
+    href: "/dashboard/events",
+    desc: "Manage school events and schedules.",
+    icon: "📅",
+  },
+  {
+    title: "Finance",
+    href: "/dashboard/finance",
+    desc: "Handle tuition, receipts, and finance reporting.",
+    icon: "💳",
+  },
+  {
+    title: "Report Cards",
+    href: "/dashboard/report-cards",
+    desc: "Generate and manage student report cards.",
+    icon: "🧾",
+  },
+  {
+    title: "Resources",
+    href: "/dashboard/resources",
+    desc: "Upload and organize learning materials.",
+    icon: "📚",
+  },
+  {
+    title: "Scores",
+    href: "/dashboard/scores",
+    desc: "Manage tests, assessments, and exam scores.",
+    icon: "📊",
+  },
+  {
+    title: "Settings",
+    href: "/dashboard/settings",
+    desc: "Configure school identity and platform settings.",
+    icon: "⚙️",
+  },
+  {
+    title: "Tasks",
+    href: "/dashboard/tasks",
+    desc: "Track assignments, workflows, and admin tasks.",
+    icon: "✅",
+  },
+];
+
 export default function DashboardPage() {
-  const router = useRouter();
   const [user, setUser] = useState<AuthedUser>(null);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let alive = true;
-
-    (async () => {
-      const me = await fetchMe();
-      if (!alive) return;
-
-      if (!me) {
-        router.replace("/login");
-        return;
-      }
-
-      setUser(me);
-      setLoading(false);
-    })();
-
-    return () => {
-      alive = false;
-    };
-  }, [router]);
-
-  async function logout() {
-    await fetch("/api/auth/logout", {
-      method: "POST",
-      credentials: "include",
-    });
-    router.replace("/login");
-  }
-
-  if (loading) {
-    return (
-      <main style={{ padding: "2rem" }}>
-        <p>Loading dashboard...</p>
-      </main>
-    );
-  }
+    fetchMe().then(setUser);
+  }, []);
 
   return (
-    <main style={{ padding: "2rem", maxWidth: 1000 }}>
-      <header style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "center" }}>
+    <div>
+      <section style={styles.hero}>
         <div>
-          <h1 style={{ margin: 0 }}>Dashboard</h1>
-          <p style={{ marginTop: 8, opacity: 0.8 }}>
-            Signed in as <b>{user?.email}</b>
+          <h1 style={styles.heroTitle}>Dashboard</h1>
+          <p style={styles.heroText}>
+            Welcome back{" "}
+            <b>{user?.email || user?.username || "User"}</b>. Here’s your school
+            control center.
+          </p>
+        </div>
+      </section>
+
+      <section style={styles.statsGrid}>
+        <StatCard title="Modules" value="9" subtitle="Core dashboard sections" />
+        <StatCard title="Session" value="Active" subtitle="Authentication is working" />
+        <StatCard title="API" value="Online" subtitle="Backend connection healthy" />
+        <StatCard title="Role" value={user?.role || "--"} subtitle="Current access level" />
+      </section>
+
+      <section style={{ marginTop: 28 }}>
+        <div style={styles.sectionHeader}>
+          <h2 style={styles.sectionTitle}>Workspace Modules</h2>
+          <p style={styles.sectionSub}>
+            Open a page below to continue building your platform.
           </p>
         </div>
 
-        <button onClick={logout} style={{ padding: "10px 14px" }}>
-          Logout
-        </button>
-      </header>
-
-      {/* Quick actions */}
-      <section style={{ marginTop: 18, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
-        {user?.role === "admin" && (
-          <ActionCard
-            title="Manage users"
-            description="Create teachers/parents/students, reset passwords, deactivate accounts."
-            onClick={() => router.push("/admin/users")}
-          />
-        )}
-
-        <ActionCard
-          title="Announcements"
-          description="Post updates for teachers, parents, and students."
-          onClick={() => router.push("/dashboard/announcements")}
-        />
-
-        <ActionCard
-          title="Resources"
-          description="Upload and organize learning resources and documents."
-          onClick={() => router.push("/dashboard/resources")}
-        />
+        <div style={styles.moduleGrid}>
+          {modules.map((module) => (
+            <Link key={module.href} href={module.href} style={styles.moduleCard}>
+              <div style={styles.moduleIcon}>{module.icon}</div>
+              <div style={styles.moduleTitle}>{module.title}</div>
+              <div style={styles.moduleDesc}>{module.desc}</div>
+              <div style={styles.moduleAction}>Open module →</div>
+            </Link>
+          ))}
+        </div>
       </section>
-
-      {/* Simple status panel */}
-      <section style={{ marginTop: 18, padding: 16, border: "1px solid #ddd" }}>
-        <h2 style={{ marginTop: 0 }}>Status</h2>
-        <ul style={{ margin: 0, paddingLeft: 18 }}>
-          <li>Auth session active ✅</li>
-          <li>API reachable via /api ✅</li>
-          <li>Role-based access enabled ✅</li>
-        </ul>
-      </section>
-    </main>
+    </div>
   );
 }
 
-function ActionCard({
+function StatCard({
   title,
-  description,
-  onClick,
+  value,
+  subtitle,
 }: {
   title: string;
-  description: string;
-  onClick: () => void;
+  value: string;
+  subtitle: string;
 }) {
   return (
-    <button
-      onClick={onClick}
-      style={{
-        textAlign: "left",
-        padding: 14,
-        border: "1px solid #ddd",
-        background: "white",
-        cursor: "pointer",
-      }}
-    >
-      <div style={{ fontWeight: 700 }}>{title}</div>
-      <div style={{ marginTop: 6, opacity: 0.8 }}>{description}</div>
-      <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>Open →</div>
-    </button>
+    <div style={styles.statCard}>
+      <div style={styles.statTitle}>{title}</div>
+      <div style={styles.statValue}>{value}</div>
+      <div style={styles.statSub}>{subtitle}</div>
+    </div>
   );
 }
+
+const styles: Record<string, React.CSSProperties> = {
+  hero: {
+    background: "linear-gradient(135deg, #ffffff, #eef4ff)",
+    border: "1px solid #e5e7eb",
+    borderRadius: 20,
+    padding: 24,
+  },
+  heroTitle: {
+    margin: 0,
+    fontSize: 32,
+    fontWeight: 800,
+    color: "#0f172a",
+  },
+  heroText: {
+    marginTop: 10,
+    color: "#475569",
+    fontSize: 15,
+  },
+  statsGrid: {
+    marginTop: 20,
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gap: 16,
+  },
+  statCard: {
+    background: "#fff",
+    border: "1px solid #e5e7eb",
+    borderRadius: 18,
+    padding: 20,
+  },
+  statTitle: {
+    color: "#64748b",
+    fontSize: 13,
+    fontWeight: 600,
+  },
+  statValue: {
+    marginTop: 10,
+    fontSize: 28,
+    fontWeight: 800,
+    color: "#0f172a",
+  },
+  statSub: {
+    marginTop: 8,
+    fontSize: 13,
+    color: "#64748b",
+  },
+  sectionHeader: {
+    marginBottom: 14,
+  },
+  sectionTitle: {
+    margin: 0,
+    fontSize: 22,
+    color: "#0f172a",
+  },
+  sectionSub: {
+    marginTop: 6,
+    color: "#64748b",
+    fontSize: 14,
+  },
+  moduleGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+    gap: 16,
+  },
+  moduleCard: {
+    display: "block",
+    textDecoration: "none",
+    background: "#fff",
+    border: "1px solid #e5e7eb",
+    borderRadius: 18,
+    padding: 20,
+    color: "inherit",
+  },
+  moduleIcon: {
+    fontSize: 26,
+  },
+  moduleTitle: {
+    marginTop: 12,
+    fontWeight: 800,
+    fontSize: 18,
+    color: "#0f172a",
+  },
+  moduleDesc: {
+    marginTop: 8,
+    color: "#64748b",
+    fontSize: 14,
+    lineHeight: 1.5,
+    minHeight: 42,
+  },
+  moduleAction: {
+    marginTop: 14,
+    fontSize: 13,
+    fontWeight: 700,
+    color: "#2563eb",
+  },
+};
