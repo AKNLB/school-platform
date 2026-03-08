@@ -1,3 +1,4 @@
+// frontend/src/app/dashboard/scores/page.tsx
 "use client";
 
 import type { CSSProperties, ReactNode } from "react";
@@ -29,6 +30,14 @@ type ScoreRow = {
   grade: number;
 };
 
+type AttendanceRow = {
+  id?: number;
+  student_id?: number;
+  date?: string;
+  status?: string;
+  note?: string;
+};
+
 type AlertState = {
   type: "error" | "success";
   message: string;
@@ -43,6 +52,13 @@ type ScoreForm = {
   date: string;
   term: string;
   grade: string;
+};
+
+type AttendanceStats = {
+  present: number;
+  absent: number;
+  late: number;
+  excused: number;
 };
 
 const TERM_OPTIONS = ["Term 1", "Term 2", "Term 3"];
@@ -61,6 +77,7 @@ const emptyForm: ScoreForm = {
 export default function ScoresPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [savingInline, setSavingInline] = useState<string | null>(null);
   const [alertState, setAlertState] = useState<AlertState>(null);
 
   const [students, setStudents] = useState<StudentLite[]>([]);
@@ -72,6 +89,16 @@ export default function ScoresPage() {
   const [gradeFilter, setGradeFilter] = useState("");
   const [subjectFilter, setSubjectFilter] = useState("");
   const [query, setQuery] = useState("");
+
+  const [attendanceStats, setAttendanceStats] = useState<AttendanceStats>({
+    present: 0,
+    absent: 0,
+    late: 0,
+    excused: 0,
+  });
+
+  const [teacherRemark, setTeacherRemark] = useState("");
+  const [principalRemark, setPrincipalRemark] = useState("");
 
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<"create" | "edit">("create");
@@ -91,6 +118,15 @@ export default function ScoresPage() {
     }
   }, [form.student_id, students, form.grade]);
 
+  useEffect(() => {
+    const selectedStudentId = studentFilter || form.student_id;
+    if (selectedStudentId) {
+      void loadAttendanceStats(Number(selectedStudentId));
+    } else {
+      setAttendanceStats({ present: 0, absent: 0, late: 0, excused: 0 });
+    }
+  }, [studentFilter, form.student_id]);
+
   async function initialize() {
     setLoading(true);
     setAlertState(null);
@@ -106,25 +142,23 @@ export default function ScoresPage() {
       const userRows = Array.isArray(usersRes.data) ? usersRes.data : [];
       const scoreRows = Array.isArray(scoresRes.data) ? scoresRes.data : [];
 
-      setStudents(
-        studentRows.map((s: Record<string, unknown>) => ({
-          id: Number(s.id),
-          name: String(s.name || ""),
-          grade: Number(s.grade || 0),
+      const parsedStudents: StudentLite[] = studentRows.map((s: Record<string, unknown>) => ({
+        id: Number(s.id),
+        name: String(s.name || ""),
+        grade: Number(s.grade || 0),
+      }));
+
+      const parsedTeachers: UserLite[] = userRows
+        .map((u: Record<string, unknown>) => ({
+          id: Number(u.id),
+          username: String(u.username || ""),
+          email: typeof u.email === "string" ? u.email : null,
+          role: String(u.role || ""),
         }))
-      );
+        .filter((u: UserLite) => u.role === "teacher" || u.role === "admin");
 
-      setTeachers(
-        userRows
-          .map((u: Record<string, unknown>) => ({
-            id: Number(u.id),
-            username: String(u.username || ""),
-            email: typeof u.email === "string" ? u.email : null,
-            role: String(u.role || ""),
-          }))
-          .filter((u: UserLite) => u.role === "teacher" || u.role === "admin")
-      );
-
+      setStudents(parsedStudents);
+      setTeachers(parsedTeachers);
       setScores(scoreRows as ScoreRow[]);
     } catch (e: unknown) {
       setAlertState({
@@ -133,6 +167,34 @@ export default function ScoresPage() {
       });
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadAttendanceStats(studentId: number) {
+    try {
+      const res = await api.get(`/attendance/student/${studentId}`, {
+        params: { limit: 120 },
+      });
+
+      const rows: AttendanceRow[] = Array.isArray(res.data) ? res.data : [];
+      const counts: AttendanceStats = {
+        present: 0,
+        absent: 0,
+        late: 0,
+        excused: 0,
+      };
+
+      rows.forEach((row) => {
+        const status = String(row.status || "").toLowerCase();
+        if (status === "present") counts.present += 1;
+        else if (status === "absent") counts.absent += 1;
+        else if (status === "late") counts.late += 1;
+        else if (status === "excused") counts.excused += 1;
+      });
+
+      setAttendanceStats(counts);
+    } catch {
+      setAttendanceStats({ present: 0, absent: 0, late: 0, excused: 0 });
     }
   }
 
@@ -181,8 +243,9 @@ export default function ScoresPage() {
     if (Number.isNaN(ca) || ca < 0 || ca > 40) {
       return "CA score must be between 0 and 40.";
     }
-    if (Number.isNaN(exam) || exam < 0 || exam > 100) {
-      return "Exam score must be between 0 and 100.";
+
+    if (Number.isNaN(exam) || exam < 0 || exam > 60) {
+      return "Exam score must be between 0 and 60.";
     }
 
     return null;
@@ -190,6 +253,7 @@ export default function ScoresPage() {
 
   async function submit() {
     setFormError(null);
+
     const validation = validateForm(form);
     if (validation) {
       setFormError(validation);
@@ -208,6 +272,7 @@ export default function ScoresPage() {
     };
 
     setBusy(true);
+
     try {
       if (mode === "create") {
         const res = await api.post("/scores", payload);
@@ -215,11 +280,11 @@ export default function ScoresPage() {
 
         if (created) {
           setScores((prev) => [created, ...prev]);
-          setAlertState({ type: "success", message: "Score added successfully." });
         } else {
           await initialize();
-          setAlertState({ type: "success", message: "Score added successfully." });
         }
+
+        setAlertState({ type: "success", message: "Score added successfully." });
       } else {
         if (!editing?.id) throw new Error("No score selected.");
 
@@ -228,11 +293,11 @@ export default function ScoresPage() {
 
         if (updated) {
           setScores((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
-          setAlertState({ type: "success", message: "Score updated successfully." });
         } else {
           await initialize();
-          setAlertState({ type: "success", message: "Score updated successfully." });
         }
+
+        setAlertState({ type: "success", message: "Score updated successfully." });
       }
 
       setOpen(false);
@@ -262,6 +327,47 @@ export default function ScoresPage() {
       });
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function saveInline(row: ScoreRow, nextCa: number, nextExam: number) {
+    const key = `${row.id}:${row.subject}`;
+    setSavingInline(key);
+
+    try {
+      const payload = {
+        student_id: row.student_id,
+        subject: row.subject,
+        cont_ass_score: nextCa,
+        exam_score: nextExam,
+        teacher_id: row.teacher_id,
+        date: row.date,
+        term: row.term,
+        grade: row.grade,
+      };
+
+      const res = await api.put(`/scores/${row.id}`, payload);
+      const updated = isScore(res?.data) ? (res.data as ScoreRow) : null;
+
+      if (updated) {
+        setScores((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+      } else {
+        setScores((prev) =>
+          prev.map((item) =>
+            item.id === row.id
+              ? { ...item, cont_ass_score: nextCa, exam_score: nextExam }
+              : item
+          )
+        );
+      }
+    } catch (e: unknown) {
+      setAlertState({
+        type: "error",
+        message: extractErr(e, "Inline save failed."),
+      });
+      await initialize();
+    } finally {
+      setSavingInline(null);
     }
   }
 
@@ -307,46 +413,91 @@ export default function ScoresPage() {
     });
   }, [scores, studentFilter, termFilter, gradeFilter, subjectFilter, query, studentMap, teacherMap]);
 
-  const stats = useMemo(() => {
-    const total = scores.length;
-    const filtered = filteredScores.length;
+  const preview = useMemo(() => {
+    const list = filteredScores.map((row) => {
+      const total = Number(row.cont_ass_score || 0) + Number(row.exam_score || 0);
+      return {
+        ...row,
+        total,
+        letter: gradeLetter(total),
+        effort: effortLabel(total),
+      };
+    });
 
-    const average =
-      filteredScores.length > 0
-        ? (
-            filteredScores.reduce(
-              (sum, row) => sum + Number(row.cont_ass_score || 0) + Number(row.exam_score || 0),
-              0
-            ) / filteredScores.length
-          ).toFixed(1)
-        : "--";
+    const sum = list.reduce((acc, item) => acc + item.total, 0);
+    const count = list.length;
+    const avg = count ? Math.round((sum / count) * 10) / 10 : 0;
+    const pass = list.filter((item) => item.total >= 50).length;
+    const fail = count - pass;
 
-    const topSubject = (() => {
-      if (!filteredScores.length) return "--";
+    return {
+      list,
+      sum,
+      count,
+      avg,
+      pass,
+      fail,
+      overallLetter: gradeLetter(avg),
+      overallEffort: effortLabel(avg),
+    };
+  }, [filteredScores]);
 
-      const grouped = new Map<string, number[]>();
-      filteredScores.forEach((row) => {
-        const totalScore = Number(row.cont_ass_score || 0) + Number(row.exam_score || 0);
-        const arr = grouped.get(row.subject) || [];
-        arr.push(totalScore);
-        grouped.set(row.subject, arr);
-      });
+  const suggestedTeacherRemark = useMemo(() => {
+    return suggestTeacherRemark(
+      preview.avg,
+      attendanceStats.present,
+      attendanceStats.absent,
+      attendanceStats.late
+    );
+  }, [preview.avg, attendanceStats]);
 
-      let best = { subject: "--", avg: -1 };
-      grouped.forEach((values, subject) => {
-        const avg = values.reduce((a, b) => a + b, 0) / values.length;
-        if (avg > best.avg) best = { subject, avg };
-      });
-
-      return best.subject;
-    })();
-
-    return { total, filtered, average, topSubject };
-  }, [scores, filteredScores]);
+  const suggestedPrincipalRemark = useMemo(() => {
+    return suggestPrincipalRemark(preview.avg, attendanceStats.absent);
+  }, [preview.avg, attendanceStats.absent]);
 
   const uniqueSubjects = useMemo(() => {
     return Array.from(new Set(scores.map((s) => s.subject))).sort((a, b) => a.localeCompare(b));
   }, [scores]);
+
+  const selectedStudent = studentFilter
+    ? students.find((s) => String(s.id) === studentFilter) || null
+    : null;
+
+  function openReportJSON() {
+    if (typeof window === "undefined") return;
+    const studentId = studentFilter || form.student_id;
+    const grade = gradeFilter || form.grade || selectedStudent?.grade || "";
+
+    if (!studentId || !termFilter && !form.term) {
+      window.alert("Select a student and term first.");
+      return;
+    }
+
+    const term = termFilter || form.term || "Term 1";
+    const url = `/api/report_card?student_id=${studentId}&term=${encodeURIComponent(term)}&grade=${grade}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  function openReportPDF() {
+    if (typeof window === "undefined") return;
+    const studentId = studentFilter || form.student_id;
+    const grade = gradeFilter || form.grade || selectedStudent?.grade || "";
+    const term = termFilter || form.term || "Term 1";
+
+    if (!studentId || !grade) {
+      window.alert("Select a student first.");
+      return;
+    }
+
+    const url =
+      `/api/report_card/pdf?student_id=${studentId}` +
+      `&term=${encodeURIComponent(term)}` +
+      `&grade=${grade}` +
+      `&teacher_remark=${encodeURIComponent(teacherRemark || suggestedTeacherRemark)}` +
+      `&principal_remark=${encodeURIComponent(principalRemark || suggestedPrincipalRemark)}`;
+
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
 
   return (
     <div style={pageShell}>
@@ -356,8 +507,8 @@ export default function ScoresPage() {
             <div style={eyebrow}>School Platform</div>
             <h1 style={heroTitle}>Scores</h1>
             <p style={subtitle}>
-              Manage continuous assessment, exam marks, term performance, and the score
-              records that drive report cards across your platform.
+              Manage subject scores, calculate performance instantly, connect attendance to
+              report remarks, and prepare report-card exports from one control center.
             </p>
           </div>
 
@@ -393,17 +544,19 @@ export default function ScoresPage() {
         )}
 
         <section style={statsGrid}>
-          <StatCard label="All Scores" value={String(stats.total)} subtitle="Total records stored" accent="blue" />
-          <StatCard label="Filtered" value={String(stats.filtered)} subtitle="Visible after filters" accent="green" />
-          <StatCard label="Average Total" value={String(stats.average)} subtitle="CA + Exam average" accent="purple" />
-          <StatCard label="Top Subject" value={String(stats.topSubject)} subtitle="Best average subject" accent="amber" />
+          <StatCard label="All Scores" value={String(scores.length)} subtitle="Total stored records" accent="blue" />
+          <StatCard label="Filtered" value={String(preview.count)} subtitle="Current visible score rows" accent="green" />
+          <StatCard label="Average" value={String(preview.avg)} subtitle={`Overall ${preview.overallLetter} • ${preview.overallEffort}`} accent="purple" />
+          <StatCard label="Pass / Fail" value={`${preview.pass} / ${preview.fail}`} subtitle="Based on total score >= 50" accent="amber" />
         </section>
 
         <section style={panel}>
           <div style={panelHeader}>
             <div>
-              <div style={panelTitle}>Filters</div>
-              <div style={panelSubtitle}>Narrow score records by student, term, grade, or subject.</div>
+              <div style={panelTitle}>Filters & Report Tools</div>
+              <div style={panelSubtitle}>
+                Choose a student, term, and subject view. Then generate remarks and reports.
+              </div>
             </div>
           </div>
 
@@ -427,7 +580,7 @@ export default function ScoresPage() {
                   <option value="">All students</option>
                   {students.map((student) => (
                     <option key={student.id} value={student.id}>
-                      #{student.id} • {student.name}
+                      #{student.id} • {student.name} • Grade {student.grade}
                     </option>
                   ))}
                 </select>
@@ -491,80 +644,224 @@ export default function ScoresPage() {
           </div>
         </section>
 
-        <section style={{ ...panel, marginTop: 18 }}>
-          <div style={panelHeader}>
-            <div>
-              <div style={panelTitle}>Score Register</div>
-              <div style={panelSubtitle}>
-                {loading ? "Loading..." : `${filteredScores.length} score row(s) shown`}
+        <div style={splitGrid}>
+          <section style={panel}>
+            <div style={panelHeader}>
+              <div>
+                <div style={panelTitle}>Gradebook</div>
+                <div style={panelSubtitle}>
+                  Continuous assessment is 0–40 and exam is 0–60.
+                </div>
               </div>
             </div>
-          </div>
 
-          <div style={panelBody}>
-            {loading ? (
-              <EmptyState text="Loading score records..." />
-            ) : filteredScores.length === 0 ? (
-              <EmptyState text="No score records found for the current filters." />
-            ) : (
-              <div style={tableWrap}>
-                <table style={table}>
-                  <thead>
-                    <tr>
-                      <th style={th}>Student</th>
-                      <th style={th}>Subject</th>
-                      <th style={{ ...th, textAlign: "right" }}>CA</th>
-                      <th style={{ ...th, textAlign: "right" }}>Exam</th>
-                      <th style={{ ...th, textAlign: "right" }}>Total</th>
-                      <th style={th}>Term</th>
-                      <th style={th}>Grade</th>
-                      <th style={th}>Teacher</th>
-                      <th style={th}>Date</th>
-                      <th style={{ ...th, textAlign: "right" }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredScores.map((row) => {
-                      const student = studentMap.get(row.student_id);
-                      const teacher = teacherMap.get(row.teacher_id);
-                      const total = Number(row.cont_ass_score || 0) + Number(row.exam_score || 0);
+            <div style={panelBody}>
+              {loading ? (
+                <EmptyState text="Loading score records..." />
+              ) : preview.list.length === 0 ? (
+                <EmptyState text="No score records found for the current filters." />
+              ) : (
+                <div style={tableWrap}>
+                  <table style={table}>
+                    <thead>
+                      <tr>
+                        <th style={th}>Student</th>
+                        <th style={th}>Subject</th>
+                        <th style={{ ...th, textAlign: "right" }}>CA</th>
+                        <th style={{ ...th, textAlign: "right" }}>Exam</th>
+                        <th style={{ ...th, textAlign: "right" }}>Total</th>
+                        <th style={th}>Grade</th>
+                        <th style={th}>Effort</th>
+                        <th style={th}>Term</th>
+                        <th style={{ ...th, textAlign: "right" }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {preview.list.map((row) => {
+                        const student = studentMap.get(row.student_id);
+                        const savingKey = `${row.id}:${row.subject}`;
+                        const isSaving = savingInline === savingKey;
 
-                      return (
-                        <tr key={row.id}>
-                          <td style={tdStrong}>
-                            <div>{student?.name || `Student #${row.student_id}`}</div>
-                            <div style={subCell}>#{row.student_id}</div>
-                          </td>
-                          <td style={td}>{row.subject}</td>
-                          <td style={{ ...td, textAlign: "right" }}>{row.cont_ass_score}</td>
-                          <td style={{ ...td, textAlign: "right" }}>{row.exam_score}</td>
-                          <td style={{ ...tdStrong, textAlign: "right" }}>{total}</td>
-                          <td style={td}>{row.term}</td>
-                          <td style={td}>{row.grade}</td>
-                          <td style={td}>
-                            <div>{teacher?.username || `#${row.teacher_id}`}</div>
-                            <div style={subCell}>{teacher?.email || ""}</div>
-                          </td>
-                          <td style={td}>{formatDate(row.date)}</td>
-                          <td style={{ ...td, textAlign: "right" }}>
-                            <div style={rowActions}>
-                              <button style={btnSecondarySmall} onClick={() => openEdit(row)} disabled={busy}>
-                                Edit
-                              </button>
-                              <button style={btnDangerSmall} onClick={() => void removeScore(row)} disabled={busy}>
-                                Delete
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                        return (
+                          <tr key={row.id}>
+                            <td style={tdStrong}>
+                              <div>{student?.name || `Student #${row.student_id}`}</div>
+                              <div style={subCell}>Grade {row.grade}</div>
+                            </td>
+                            <td style={td}>{row.subject}</td>
+
+                            <td style={{ ...td, textAlign: "right" }}>
+                              <input
+                                type="number"
+                                min={0}
+                                max={40}
+                                value={row.cont_ass_score}
+                                style={inlineInput}
+                                onChange={(e) => {
+                                  const value = clampInt(e.target.value, 0, 40);
+                                  setScores((prev) =>
+                                    prev.map((item) =>
+                                      item.id === row.id ? { ...item, cont_ass_score: value } : item
+                                    )
+                                  );
+                                }}
+                                onBlur={() =>
+                                  void saveInline(
+                                    row,
+                                    clampInt(row.cont_ass_score, 0, 40),
+                                    clampInt(row.exam_score, 0, 60)
+                                  )
+                                }
+                              />
+                            </td>
+
+                            <td style={{ ...td, textAlign: "right" }}>
+                              <input
+                                type="number"
+                                min={0}
+                                max={60}
+                                value={row.exam_score}
+                                style={inlineInput}
+                                onChange={(e) => {
+                                  const value = clampInt(e.target.value, 0, 60);
+                                  setScores((prev) =>
+                                    prev.map((item) =>
+                                      item.id === row.id ? { ...item, exam_score: value } : item
+                                    )
+                                  );
+                                }}
+                                onBlur={() =>
+                                  void saveInline(
+                                    row,
+                                    clampInt(row.cont_ass_score, 0, 40),
+                                    clampInt(row.exam_score, 0, 60)
+                                  )
+                                }
+                              />
+                            </td>
+
+                            <td style={{ ...tdStrong, textAlign: "right" }}>
+                              {row.total}
+                              {isSaving ? <span style={saveTag}>Saving...</span> : null}
+                            </td>
+                            <td style={td}>{row.letter}</td>
+                            <td style={td}>{row.effort}</td>
+                            <td style={td}>{row.term}</td>
+
+                            <td style={{ ...td, textAlign: "right" }}>
+                              <div style={rowActions}>
+                                <button style={btnSecondarySmall} onClick={() => openEdit(row)} disabled={busy}>
+                                  Edit
+                                </button>
+                                <button style={btnDangerSmall} onClick={() => void removeScore(row)} disabled={busy}>
+                                  Delete
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              <div style={helperText}>Tip: edit CA or Exam, then click outside the box to save.</div>
+            </div>
+          </section>
+
+          <section style={panel}>
+            <div style={panelHeader}>
+              <div>
+                <div style={panelTitle}>Report Preview & Remarks</div>
+                <div style={panelSubtitle}>
+                  Use attendance and score averages to prepare report-card comments fast.
+                </div>
               </div>
-            )}
-          </div>
-        </section>
+            </div>
+
+            <div style={panelBody}>
+              <div style={summaryGrid}>
+                <SummaryCard label="Average" value={String(preview.avg)} sub={`Grade ${preview.overallLetter}`} />
+                <SummaryCard label="Overall" value={preview.overallEffort} sub={`Pass ${preview.pass} • Fail ${preview.fail}`} />
+              </div>
+
+              <div style={attendanceBox}>
+                <div style={boxTitle}>Attendance Snapshot</div>
+                <div style={attendanceGrid}>
+                  <AttendancePill label="Present" value={attendanceStats.present} />
+                  <AttendancePill label="Absent" value={attendanceStats.absent} />
+                  <AttendancePill label="Late" value={attendanceStats.late} />
+                  <AttendancePill label="Excused" value={attendanceStats.excused} />
+                </div>
+                <button
+                  onClick={() => {
+                    const id = studentFilter || form.student_id;
+                    if (!id) return;
+                    void loadAttendanceStats(Number(id));
+                  }}
+                  style={{ ...btnSecondary, marginTop: 12 }}
+                >
+                  Refresh attendance stats
+                </button>
+              </div>
+
+              <Field label="Teacher Remark">
+                <textarea
+                  value={teacherRemark}
+                  onChange={(e) => setTeacherRemark(e.target.value)}
+                  rows={4}
+                  style={textarea}
+                  placeholder="Type a custom teacher remark or use suggested remarks below..."
+                />
+              </Field>
+
+              <Field label="Principal Remark">
+                <textarea
+                  value={principalRemark}
+                  onChange={(e) => setPrincipalRemark(e.target.value)}
+                  rows={4}
+                  style={textarea}
+                  placeholder="Type a custom principal remark or use suggested remarks below..."
+                />
+              </Field>
+
+              <div style={suggestionBox}>
+                <div style={boxTitle}>Suggested Remarks</div>
+                <div style={suggestionItem}>
+                  <strong>Teacher:</strong> {suggestedTeacherRemark}
+                </div>
+                <div style={suggestionItem}>
+                  <strong>Principal:</strong> {suggestedPrincipalRemark}
+                </div>
+              </div>
+
+              <div style={modalActions}>
+                <button
+                  style={btnSecondary}
+                  onClick={() => {
+                    setTeacherRemark(suggestedTeacherRemark);
+                    setPrincipalRemark(suggestedPrincipalRemark);
+                  }}
+                >
+                  Insert suggested remarks
+                </button>
+
+                <button style={btnSecondary} onClick={openReportJSON}>
+                  View Report JSON
+                </button>
+
+                <button style={btnPrimary} onClick={openReportPDF}>
+                  Print / PDF
+                </button>
+              </div>
+
+              <div style={helperText}>
+                PDF export uses the remarks typed here. If left blank, the suggested remarks will be used.
+              </div>
+            </div>
+          </section>
+        </div>
 
         {open && (
           <Modal title={mode === "create" ? "Add Score" : "Edit Score"} onClose={closeModal}>
@@ -632,8 +929,8 @@ export default function ScoresPage() {
                   style={fieldInput}
                   type="number"
                   min={0}
-                  max={100}
-                  placeholder="0 - 100"
+                  max={60}
+                  placeholder="0 - 60"
                 />
               </Field>
 
@@ -709,6 +1006,25 @@ function StatCard({
       <div style={statLabel}>{label}</div>
       <div style={statValue}>{value}</div>
       <div style={statSub}>{subtitle}</div>
+    </div>
+  );
+}
+
+function SummaryCard({ label, value, sub }: { label: string; value: string; sub: string }) {
+  return (
+    <div style={summaryCard}>
+      <div style={summaryLabel}>{label}</div>
+      <div style={summaryValue}>{value}</div>
+      <div style={summarySub}>{sub}</div>
+    </div>
+  );
+}
+
+function AttendancePill({ label, value }: { label: string; value: number }) {
+  return (
+    <div style={attendancePill}>
+      <div style={attendancePillLabel}>{label}</div>
+      <div style={attendancePillValue}>{value}</div>
     </div>
   );
 }
@@ -789,6 +1105,55 @@ function EmptyState({ text }: { text: string }) {
   return <div style={emptyState}>{text}</div>;
 }
 
+function clampInt(value: string | number, min: number, max: number) {
+  const parsed = Number(value);
+  if (Number.isNaN(parsed)) return min;
+  return Math.max(min, Math.min(max, Math.round(parsed)));
+}
+
+function effortLabel(total: number) {
+  if (total >= 90) return "A Excellent";
+  if (total >= 70) return "B Very Good";
+  if (total >= 50) return "C Good";
+  if (total >= 40) return "D Satisfactory";
+  return "E Working Towards";
+}
+
+function gradeLetter(total: number) {
+  if (total >= 90) return "A";
+  if (total >= 80) return "B";
+  if (total >= 70) return "C";
+  if (total >= 60) return "D";
+  if (total >= 50) return "E";
+  return "F";
+}
+
+function suggestTeacherRemark(avg: number, present: number, absent: number, late: number) {
+  if (avg >= 85 && absent <= 1) {
+    return "Excellent performance and consistent attendance. Keep up the great work.";
+  }
+  if (avg >= 70) {
+    return "Very good progress this term. Continue revising regularly to improve even more.";
+  }
+  if (avg >= 50) {
+    return "Good effort shown. Focus on weak subjects and practice consistently.";
+  }
+
+  let msg = "Needs improvement. More attention is required in class and at home.";
+  if (absent >= 3) msg += " Attendance has affected progress—please improve attendance.";
+  if (late >= 3) msg += " Work on punctuality to avoid missing key lessons.";
+  if (present >= 10 && avg < 50) msg += " Additional revision support is recommended.";
+  return msg;
+}
+
+function suggestPrincipalRemark(avg: number, absent: number) {
+  if (avg >= 85) return "Outstanding work. Maintain this level of excellence.";
+  if (avg >= 70) return "Good performance. Stay focused and aim higher next term.";
+  if (avg >= 50) return "Fair performance. With more effort, you can achieve better results.";
+  if (absent >= 3) return "Performance is below expectation. Improve attendance and study habits.";
+  return "Performance is below expectation. Greater commitment is needed next term.";
+}
+
 function extractErr(e: unknown, fallback: string) {
   const err = e as {
     response?: { data?: { message?: string; error?: string } | string };
@@ -815,14 +1180,6 @@ function isScore(value: unknown): value is ScoreRow {
   return typeof row.id === "number" && typeof row.subject === "string";
 }
 
-function formatDate(value: string) {
-  try {
-    return new Date(value).toLocaleDateString();
-  } catch {
-    return value;
-  }
-}
-
 const pageShell: CSSProperties = {
   minHeight: "100vh",
   background: "linear-gradient(180deg, #0f172a 0%, #111827 45%, #0b1220 100%)",
@@ -831,7 +1188,7 @@ const pageShell: CSSProperties = {
 };
 
 const page: CSSProperties = {
-  maxWidth: 1400,
+  maxWidth: 1440,
   margin: "0 auto",
 };
 
@@ -947,6 +1304,13 @@ const filterGrid: CSSProperties = {
   gap: 12,
 };
 
+const splitGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1.5fr 1fr",
+  gap: 18,
+  marginTop: 18,
+};
+
 const formGrid: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "1fr 1fr",
@@ -967,6 +1331,17 @@ const fieldInput: CSSProperties = {
   background: "rgba(15,23,42,0.82)",
   color: "#fff",
   outline: "none",
+};
+
+const textarea: CSSProperties = {
+  width: "100%",
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.14)",
+  background: "rgba(15,23,42,0.82)",
+  color: "#fff",
+  outline: "none",
+  resize: "vertical",
 };
 
 const alert: CSSProperties = {
@@ -1025,6 +1400,24 @@ const rowActions: CSSProperties = {
   flexWrap: "wrap",
 };
 
+const inlineInput: CSSProperties = {
+  width: 72,
+  padding: "8px 10px",
+  borderRadius: 10,
+  border: "1px solid rgba(255,255,255,0.14)",
+  background: "rgba(15,23,42,0.82)",
+  color: "#fff",
+  textAlign: "right",
+  outline: "none",
+};
+
+const saveTag: CSSProperties = {
+  marginLeft: 8,
+  fontSize: 11,
+  fontWeight: 700,
+  color: "#93c5fd",
+};
+
 const btnPrimary: CSSProperties = {
   padding: "10px 14px",
   borderRadius: 12,
@@ -1081,6 +1474,7 @@ const modalActions: CSSProperties = {
   justifyContent: "flex-end",
   gap: 10,
   marginTop: 14,
+  flexWrap: "wrap",
 };
 
 const emptyState: CSSProperties = {
@@ -1089,4 +1483,101 @@ const emptyState: CSSProperties = {
   borderRadius: 14,
   border: "1px dashed rgba(255,255,255,0.14)",
   background: "rgba(255,255,255,0.03)",
+};
+
+const helperText: CSSProperties = {
+  marginTop: 12,
+  fontSize: 12,
+  color: "#94a3b8",
+};
+
+const summaryGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 12,
+  marginBottom: 14,
+};
+
+const summaryCard: CSSProperties = {
+  borderRadius: 14,
+  padding: 14,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.04)",
+};
+
+const summaryLabel: CSSProperties = {
+  fontSize: 12,
+  color: "#94a3b8",
+  textTransform: "uppercase",
+  letterSpacing: 0.7,
+  fontWeight: 800,
+};
+
+const summaryValue: CSSProperties = {
+  marginTop: 8,
+  fontSize: 24,
+  fontWeight: 950,
+  color: "#fff",
+};
+
+const summarySub: CSSProperties = {
+  marginTop: 6,
+  fontSize: 13,
+  color: "#cbd5e1",
+};
+
+const attendanceBox: CSSProperties = {
+  borderRadius: 14,
+  padding: 14,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.04)",
+  marginBottom: 14,
+};
+
+const boxTitle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 900,
+  color: "#fff",
+  marginBottom: 10,
+};
+
+const attendanceGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, 1fr)",
+  gap: 10,
+};
+
+const attendancePill: CSSProperties = {
+  borderRadius: 12,
+  padding: 12,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(15,23,42,0.82)",
+};
+
+const attendancePillLabel: CSSProperties = {
+  fontSize: 12,
+  color: "#94a3b8",
+  fontWeight: 800,
+};
+
+const attendancePillValue: CSSProperties = {
+  marginTop: 6,
+  fontSize: 22,
+  fontWeight: 950,
+  color: "#fff",
+};
+
+const suggestionBox: CSSProperties = {
+  borderRadius: 14,
+  padding: 14,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.04)",
+  marginTop: 14,
+};
+
+const suggestionItem: CSSProperties = {
+  fontSize: 13,
+  color: "#e5e7eb",
+  lineHeight: 1.6,
+  marginTop: 8,
 };
