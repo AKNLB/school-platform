@@ -1,6 +1,6 @@
 "use client";
 
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 
@@ -25,28 +25,66 @@ type FinanceSummary = {
   outstanding_top: OutstandingItem[];
 };
 
+type PaymentItem = {
+  id: number;
+  student_id: number;
+  tuition_id: number;
+  amount: number;
+  method: string | null;
+  reference: string | null;
+  note: string | null;
+  timestamp: string | null;
+};
+
+type TuitionInfo = {
+  id: number;
+  student_id: number;
+  term: string;
+  total_amount: number;
+  amount_paid: number;
+  balance: number;
+  balance_due: number;
+  payment_plan: string | null;
+  status: string | null;
+  payments: Array<{
+    id: number;
+    amount: number;
+    method: string | null;
+    reference: string | null;
+    timestamp: string | null;
+    note: string | null;
+  }>;
+};
+
 const TERM_OPTIONS = ["Term 1", "Term 2", "Term 3"];
 
 export default function FinancePage() {
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [term, setTerm] = useState("Term 1");
-  const [grade, setGrade] = useState<string>("");
+  const [grade, setGrade] = useState("");
+  const [search, setSearch] = useState("");
 
   const [data, setData] = useState<FinanceSummary | null>(null);
-  const [search, setSearch] = useState("");
+
+  const [statementOpen, setStatementOpen] = useState(false);
+  const [statementLoading, setStatementLoading] = useState(false);
+  const [statementError, setStatementError] = useState<string | null>(null);
+  const [selectedStudent, setSelectedStudent] = useState<OutstandingItem | null>(null);
+  const [tuition, setTuition] = useState<TuitionInfo | null>(null);
+
+  const [paymentsOpen, setPaymentsOpen] = useState(false);
+  const [paymentsLoading, setPaymentsLoading] = useState(false);
+  const [paymentsError, setPaymentsError] = useState<string | null>(null);
+  const [payments, setPayments] = useState<PaymentItem[]>([]);
 
   async function load() {
     setLoading(true);
     setError(null);
 
     try {
-      const params: Record<string, string> = {
-        term,
-      };
-
+      const params: Record<string, string> = { term };
       if (grade.trim()) params.grade = grade.trim();
 
       const res = await api.get("/finance/dashboard", { params });
@@ -92,6 +130,59 @@ export default function FinancePage() {
     return balance / count;
   }, [data]);
 
+  async function openStudentStatement(student: OutstandingItem) {
+    setSelectedStudent(student);
+    setStatementOpen(true);
+    setStatementLoading(true);
+    setStatementError(null);
+    setTuition(null);
+
+    try {
+      const res = await api.get(`/tuition/${student.student_id}`, {
+        params: { term },
+      });
+      setTuition(res.data);
+    } catch (e: unknown) {
+      setStatementError(extractErr(e, "Failed to load student statement"));
+    } finally {
+      setStatementLoading(false);
+    }
+  }
+
+  async function openPaymentHistory(student: OutstandingItem) {
+    setSelectedStudent(student);
+    setPaymentsOpen(true);
+    setPaymentsLoading(true);
+    setPaymentsError(null);
+    setPayments([]);
+
+    try {
+      const res = await api.get(`/payments/${student.student_id}`, {
+        params: { term },
+      });
+      setPayments(Array.isArray(res.data) ? res.data : []);
+    } catch (e: unknown) {
+      setPaymentsError(extractErr(e, "Failed to load payment history"));
+    } finally {
+      setPaymentsLoading(false);
+    }
+  }
+
+  function openStatementPdf(studentId: number) {
+    const url = `/api/finance/statement?student_id=${studentId}&term=${encodeURIComponent(term)}`;
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  function openStatementCsv(studentId: number) {
+    const url = `/api/finance/statement?student_id=${studentId}&term=${encodeURIComponent(term)}&format=csv`;
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  function openReceipt(paymentId: number) {
+    const url = `/api/payments/${paymentId}/receipt.pdf`;
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
   return (
     <div style={pageShell}>
       <div style={page}>
@@ -104,17 +195,13 @@ export default function FinancePage() {
               <div style={eyebrow}>School Platform</div>
               <h1 style={heroTitle}>Finance</h1>
               <p style={subtitle}>
-                Monitor tuition performance, outstanding balances, student payment status,
-                and finance reporting from one clean control center.
+                Monitor tuition performance, review student balances, inspect payment
+                history, and open statements and receipts from one premium finance panel.
               </p>
             </div>
 
             <div style={heroActions}>
-              <button
-                onClick={() => void load()}
-                style={btnSecondary}
-                disabled={loading || busy}
-              >
+              <button onClick={() => void load()} style={btnSecondary} disabled={loading}>
                 Refresh
               </button>
             </div>
@@ -241,25 +328,25 @@ export default function FinancePage() {
           <div style={panel}>
             <div style={panelHeader}>
               <div style={panelTitle}>Quick Actions</div>
-              <div style={panelSubtitle}>Finance workflows you can expand next</div>
+              <div style={panelSubtitle}>Fast finance workflows</div>
             </div>
 
             <div style={quickActions}>
               <QuickActionCard
                 title="Student Statements"
-                description="Generate term statements and review payment history by student."
+                description="Open a student statement preview and export PDF or CSV."
               />
               <QuickActionCard
-                title="Receipts"
-                description="Open receipt workflows for payments and downloadable proof."
+                title="Payment History"
+                description="Inspect payment method, date, receipt, and reference details."
               />
               <QuickActionCard
-                title="Payment Tracking"
-                description="Track unpaid balances, partial payments, and collection progress."
+                title="Receipt Access"
+                description="Open payment receipts directly from any payment record."
               />
               <QuickActionCard
-                title="Reports"
-                description="Export tuition summaries and finance performance by term or grade."
+                title="Collections"
+                description="Focus on balances, unpaid terms, and follow-up priorities."
               />
             </div>
           </div>
@@ -270,9 +357,7 @@ export default function FinancePage() {
             <div>
               <div style={panelTitle}>Outstanding Balances</div>
               <div style={panelSubtitle}>
-                {loading
-                  ? "Loading balances..."
-                  : `${outstanding.length} student(s) shown`}
+                {loading ? "Loading balances..." : `${outstanding.length} student(s) shown`}
               </div>
             </div>
           </div>
@@ -301,6 +386,7 @@ export default function FinancePage() {
                     <th style={thRight}>Paid</th>
                     <th style={thRight}>Balance</th>
                     <th style={th}>Status</th>
+                    <th style={th}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -317,6 +403,28 @@ export default function FinancePage() {
                       <td style={td}>
                         <span style={statusPill(row.status)}>{row.status || "Partial"}</span>
                       </td>
+                      <td style={td}>
+                        <div style={actionWrap}>
+                          <button
+                            style={miniBtn}
+                            onClick={() => void openStudentStatement(row)}
+                          >
+                            Statement
+                          </button>
+                          <button
+                            style={miniBtn}
+                            onClick={() => void openPaymentHistory(row)}
+                          >
+                            Payments
+                          </button>
+                          <button
+                            style={miniBtnGhost}
+                            onClick={() => openStatementPdf(row.student_id)}
+                          >
+                            PDF
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -324,6 +432,133 @@ export default function FinancePage() {
             </div>
           )}
         </section>
+
+        {statementOpen && (
+          <Modal
+            title={`Student Statement${selectedStudent ? ` • ${selectedStudent.name}` : ""}`}
+            onClose={() => setStatementOpen(false)}
+          >
+            {statementLoading ? (
+              <div style={modalLoading}>Loading statement...</div>
+            ) : statementError ? (
+              <div style={modalError}>{statementError}</div>
+            ) : tuition ? (
+              <div>
+                <div style={statementTopGrid}>
+                  <InfoCard label="Student ID" value={`#${tuition.student_id}`} />
+                  <InfoCard label="Term" value={tuition.term} />
+                  <InfoCard label="Total Due" value={money(tuition.total_amount)} />
+                  <InfoCard label="Amount Paid" value={money(tuition.amount_paid)} />
+                  <InfoCard label="Balance" value={money(tuition.balance_due ?? tuition.balance)} />
+                  <InfoCard label="Status" value={tuition.status || "Partial"} />
+                </div>
+
+                <div style={statementBlock}>
+                  <div style={blockTitle}>Payment Summary</div>
+                  {tuition.payments?.length ? (
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={table}>
+                        <thead>
+                          <tr>
+                            <th style={th}>Receipt</th>
+                            <th style={th}>Date</th>
+                            <th style={thRight}>Amount</th>
+                            <th style={th}>Method</th>
+                            <th style={th}>Reference</th>
+                            <th style={th}>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {tuition.payments.map((p) => (
+                            <tr key={p.id} style={tr}>
+                              <td style={tdStrong}>PAY-{p.id}</td>
+                              <td style={td}>{formatDateTime(p.timestamp)}</td>
+                              <td style={tdRight}>{money(p.amount)}</td>
+                              <td style={td}>{p.method || "—"}</td>
+                              <td style={td}>{p.reference || "—"}</td>
+                              <td style={td}>
+                                <button style={miniBtn} onClick={() => openReceipt(p.id)}>
+                                  Receipt
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div style={emptyInline}>No payments recorded for this term.</div>
+                  )}
+                </div>
+
+                <div style={modalActions}>
+                  <button
+                    style={btnSecondary}
+                    onClick={() => selectedStudent && openStatementCsv(selectedStudent.student_id)}
+                  >
+                    Export CSV
+                  </button>
+                  <button
+                    style={btnPrimary}
+                    onClick={() => selectedStudent && openStatementPdf(selectedStudent.student_id)}
+                  >
+                    Open PDF Statement
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div style={emptyInline}>No statement data available.</div>
+            )}
+          </Modal>
+        )}
+
+        {paymentsOpen && (
+          <Modal
+            title={`Payment History${selectedStudent ? ` • ${selectedStudent.name}` : ""}`}
+            onClose={() => setPaymentsOpen(false)}
+          >
+            {paymentsLoading ? (
+              <div style={modalLoading}>Loading payment history...</div>
+            ) : paymentsError ? (
+              <div style={modalError}>{paymentsError}</div>
+            ) : payments.length === 0 ? (
+              <div style={emptyInline}>No payment history found for this term.</div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={table}>
+                  <thead>
+                    <tr>
+                      <th style={th}>Receipt</th>
+                      <th style={th}>Date</th>
+                      <th style={thRight}>Amount</th>
+                      <th style={th}>Method</th>
+                      <th style={th}>Reference</th>
+                      <th style={th}>Note</th>
+                      <th style={th}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {payments.map((p) => (
+                      <tr key={p.id} style={tr}>
+                        <td style={tdStrong}>PAY-{p.id}</td>
+                        <td style={td}>{formatDateTime(p.timestamp)}</td>
+                        <td style={tdRight}>{money(p.amount)}</td>
+                        <td style={td}>{p.method || "—"}</td>
+                        <td style={td}>{p.reference || "—"}</td>
+                        <td style={td}>{p.note || "—"}</td>
+                        <td style={td}>
+                          <button style={miniBtn} onClick={() => openReceipt(p.id)}>
+                            Receipt
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Modal>
+        )}
       </div>
     </div>
   );
@@ -382,6 +617,39 @@ function QuickActionCard({
   );
 }
 
+function InfoCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={infoCard}>
+      <div style={infoLabel}>{label}</div>
+      <div style={infoValue}>{value}</div>
+    </div>
+  );
+}
+
+function Modal({
+  title,
+  children,
+  onClose,
+}: {
+  title: string;
+  children: ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <div onMouseDown={onClose} style={modalOverlay}>
+      <div onMouseDown={(e) => e.stopPropagation()} style={modalCard}>
+        <div style={modalHeader}>
+          <div style={modalTitle}>{title}</div>
+          <button onClick={onClose} style={iconBtn}>
+            ✕
+          </button>
+        </div>
+        <div style={modalBody}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
 function extractErr(e: unknown, fallback: string) {
   const err = e as {
     response?: { data?: { message?: string; error?: string } | string };
@@ -408,6 +676,15 @@ function money(value: number) {
     currency: "USD",
     maximumFractionDigits: 2,
   }).format(Number(value || 0));
+}
+
+function formatDateTime(value: string | null) {
+  if (!value) return "—";
+  try {
+    return new Date(value).toLocaleString();
+  } catch {
+    return value;
+  }
 }
 
 function statusPill(status: string): CSSProperties {
@@ -597,6 +874,33 @@ const btnSecondary: CSSProperties = {
   cursor: "pointer",
 };
 
+const miniBtn: CSSProperties = {
+  padding: "8px 10px",
+  borderRadius: 10,
+  border: "1px solid rgba(255,255,255,0.14)",
+  background: "rgba(255,255,255,0.08)",
+  color: "#fff",
+  fontWeight: 800,
+  cursor: "pointer",
+  fontSize: 12,
+};
+
+const miniBtnGhost: CSSProperties = {
+  ...miniBtn,
+  background: "rgba(59,130,246,0.12)",
+};
+
+const iconBtn: CSSProperties = {
+  width: 36,
+  height: 36,
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.12)",
+  background: "rgba(255,255,255,0.06)",
+  color: "#fff",
+  fontWeight: 900,
+  cursor: "pointer",
+};
+
 const alertBox: CSSProperties = {
   marginBottom: 16,
   padding: "12px 14px",
@@ -620,21 +924,6 @@ const statCard: CSSProperties = {
   background: "rgba(15,23,42,0.62)",
   backdropFilter: "blur(6px)",
   boxShadow: "0 10px 30px rgba(0,0,0,0.12)",
-};
-
-const statLabel: CSSProperties = {
-  fontSize: 12,
-  color: "#94a3b8",
-  fontWeight: 800,
-  textTransform: "uppercase",
-  letterSpacing: 0.8,
-};
-
-const statValue: CSSProperties = {
-  fontSize: 28,
-  fontWeight: 950,
-  marginTop: 8,
-  color: "#ffffff",
 };
 
 const statSub: CSSProperties = {
@@ -754,6 +1043,12 @@ const emptyStateText: CSSProperties = {
   opacity: 0.82,
 };
 
+const actionWrap: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  flexWrap: "wrap",
+};
+
 const table: CSSProperties = {
   width: "100%",
   borderCollapse: "collapse",
@@ -783,6 +1078,7 @@ const td: CSSProperties = {
   padding: "14px 16px",
   color: "#e5e7eb",
   fontSize: 14,
+  verticalAlign: "top",
 };
 
 const tdStrong: CSSProperties = {
@@ -794,4 +1090,111 @@ const tdStrong: CSSProperties = {
 const tdRight: CSSProperties = {
   ...td,
   textAlign: "right",
+};
+
+const modalOverlay: CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(2,6,23,0.72)",
+  display: "grid",
+  placeItems: "center",
+  padding: 16,
+  zIndex: 60,
+};
+
+const modalCard: CSSProperties = {
+  width: "min(1100px, 100%)",
+  maxHeight: "88vh",
+  overflow: "auto",
+  borderRadius: 18,
+  border: "1px solid rgba(255,255,255,0.12)",
+  background: "#0f172a",
+  boxShadow: "0 24px 90px rgba(0,0,0,0.45)",
+};
+
+const modalHeader: CSSProperties = {
+  padding: "14px 16px",
+  borderBottom: "1px solid rgba(255,255,255,0.08)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 12,
+};
+
+const modalTitle: CSSProperties = {
+  fontWeight: 900,
+  fontSize: 16,
+  color: "#fff",
+};
+
+const modalBody: CSSProperties = {
+  padding: 16,
+};
+
+const modalLoading: CSSProperties = {
+  padding: 18,
+  color: "#cbd5e1",
+};
+
+const modalError: CSSProperties = {
+  padding: 14,
+  borderRadius: 12,
+  border: "1px solid rgba(239,68,68,0.35)",
+  background: "rgba(239,68,68,0.12)",
+  color: "#fee2e2",
+};
+
+const statementTopGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+  gap: 12,
+  marginBottom: 16,
+};
+
+const infoCard: CSSProperties = {
+  padding: 14,
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(255,255,255,0.04)",
+};
+
+const infoLabel: CSSProperties = {
+  fontSize: 12,
+  color: "#94a3b8",
+  fontWeight: 800,
+  textTransform: "uppercase",
+  letterSpacing: 0.7,
+};
+
+const infoValue: CSSProperties = {
+  marginTop: 8,
+  fontSize: 18,
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const statementBlock: CSSProperties = {
+  marginTop: 12,
+};
+
+const blockTitle: CSSProperties = {
+  fontSize: 15,
+  fontWeight: 900,
+  color: "#fff",
+  marginBottom: 10,
+};
+
+const emptyInline: CSSProperties = {
+  padding: 14,
+  borderRadius: 12,
+  background: "rgba(255,255,255,0.04)",
+  color: "#cbd5e1",
+};
+
+const modalActions: CSSProperties = {
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: 10,
+  marginTop: 16,
+  flexWrap: "wrap",
 };
