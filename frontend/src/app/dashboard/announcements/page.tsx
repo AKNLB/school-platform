@@ -97,6 +97,9 @@ export default function AnnouncementsPage() {
     return { total, pinned, teacher, parent, student };
   }, [items]);
 
+  const pinnedItems = useMemo(() => filtered.filter((x) => x.pinned), [filtered]);
+  const normalItems = useMemo(() => filtered.filter((x) => !x.pinned), [filtered]);
+
   function openCreate() {
     setMode("create");
     setEditing(null);
@@ -239,26 +242,123 @@ export default function AnnouncementsPage() {
     }
   }
 
+  function renderAnnouncement(a: Announcement) {
+    return (
+      <article
+        key={a.id}
+        style={{
+          ...announcementCard,
+          ...(a.pinned ? pinnedCard : {}),
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.transform = "translateY(-3px)";
+          e.currentTarget.style.borderColor = "rgba(255,255,255,0.18)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.transform = "translateY(0)";
+          e.currentTarget.style.borderColor = a.pinned
+            ? "rgba(250,204,21,0.36)"
+            : "rgba(255,255,255,0.08)";
+        }}
+      >
+        <div style={announcementTop}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={announcementTitleRow}>
+              <h3 style={announcementTitle}>{a.title}</h3>
+
+              {a.pinned && <Badge text="PINNED" />}
+
+              <AudienceBadge audience={a.audience} />
+            </div>
+
+            <div style={announcementBody}>{a.description}</div>
+
+            <div style={metaRow}>
+              <span style={metaText}>
+                {a.created_at ? formatDate(a.created_at) : "Date unavailable"}
+              </span>
+              {a.created_at ? <span style={metaDot}>•</span> : null}
+              {a.created_at ? <span style={metaText}>{timeAgo(a.created_at)}</span> : null}
+            </div>
+
+            {a.attachments?.length ? (
+              <div style={{ marginTop: 14 }}>
+                <div style={attachmentsLabel}>Attachments</div>
+                <div style={attachmentWrap}>
+                  {a.attachments.map((att) => (
+                    <div key={att.filename} style={attachmentPill}>
+                      <span style={attachmentIcon}>📎</span>
+                      <a href={att.url} target="_blank" rel="noreferrer" style={attachmentLink}>
+                        {att.filename}
+                      </a>
+                      <button
+                        onClick={() => void deleteAttachment(a, att.filename)}
+                        style={miniDanger}
+                        disabled={busy}
+                        title="Remove attachment"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <div style={actionsCol}>
+            <label style={btnSecondary}>
+              Upload
+              <input
+                type="file"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  e.currentTarget.value = "";
+                  if (!f) return;
+                  void uploadAttachment(a, f);
+                }}
+                disabled={busy}
+              />
+            </label>
+
+            <button style={btnSecondary} onClick={() => openEdit(a)} disabled={busy}>
+              Edit
+            </button>
+            <button style={btnDanger} onClick={() => void remove(a)} disabled={busy}>
+              Delete
+            </button>
+          </div>
+        </div>
+      </article>
+    );
+  }
+
   return (
     <div style={pageShell}>
       <div style={page}>
-        <section style={hero}>
-          <div>
-            <div style={eyebrow}>School Platform</div>
-            <h1 style={heroTitle}>Announcements</h1>
-            <p style={subtitle}>
-              Share updates with teachers, parents, and students from one clean control
-              panel.
-            </p>
-          </div>
+        <section style={heroCard}>
+          <div style={heroGlowA} />
+          <div style={heroGlowB} />
 
-          <div style={heroActions}>
-            <button onClick={() => void load()} style={btnSecondary} disabled={loading || busy}>
-              Refresh
-            </button>
-            <button onClick={openCreate} style={btnPrimary} disabled={busy}>
-              + New Announcement
-            </button>
+          <div style={heroContent}>
+            <div>
+              <div style={eyebrow}>School Platform</div>
+              <h1 style={heroTitle}>Announcements</h1>
+              <p style={subtitle}>
+                Share updates with teachers, parents, and students from one polished
+                communication hub.
+              </p>
+            </div>
+
+            <div style={heroActions}>
+              <button onClick={() => void load()} style={btnSecondary} disabled={loading || busy}>
+                Refresh
+              </button>
+              <button onClick={openCreate} style={btnPrimary} disabled={busy}>
+                + New Announcement
+              </button>
+            </div>
           </div>
         </section>
 
@@ -319,81 +419,33 @@ export default function AnnouncementsPage() {
           </div>
 
           {loading ? (
-            <div style={emptyState}>Loading announcements...</div>
+            <div style={emptyState}>
+              <div style={emptyStateTitle}>Loading announcements...</div>
+              <div style={emptyStateText}>Please wait while updates are being pulled in.</div>
+            </div>
           ) : filtered.length === 0 ? (
-            <div style={emptyState}>No announcements yet.</div>
+            <div style={emptyState}>
+              <div style={emptyStateTitle}>No announcements yet</div>
+              <div style={emptyStateText}>
+                Click <b>+ New Announcement</b> to post the first update.
+              </div>
+            </div>
           ) : (
-            filtered.map((a) => (
-              <article key={a.id} style={announcementCard}>
-                <div style={announcementTop}>
-                  <div style={{ flex: 1 }}>
-                    <div style={announcementTitleRow}>
-                      <h3 style={announcementTitle}>{a.title}</h3>
-                      {a.pinned && <Badge text="PINNED" />}
-                      <Badge text={`AUDIENCE: ${String(a.audience || "all").toUpperCase()}`} subtle />
-                    </div>
+            <>
+              {pinnedItems.length > 0 && (
+                <>
+                  <div style={sectionDivider}>📌 Pinned Announcements</div>
+                  {pinnedItems.map(renderAnnouncement)}
+                </>
+              )}
 
-                    <div style={announcementBody}>{a.description}</div>
-
-                    <div style={metaText}>
-                      {a.created_at ? `Posted: ${formatDate(a.created_at)}` : "Draft timestamp unavailable"}
-                    </div>
-
-                    {a.attachments?.length ? (
-                      <div style={{ marginTop: 14 }}>
-                        <div style={attachmentsLabel}>Attachments</div>
-                        <div style={attachmentWrap}>
-                          {a.attachments.map((att) => (
-                            <div key={att.filename} style={attachmentPill}>
-                              <a
-                                href={att.url}
-                                target="_blank"
-                                rel="noreferrer"
-                                style={attachmentLink}
-                              >
-                                {att.filename}
-                              </a>
-                              <button
-                                onClick={() => void deleteAttachment(a, att.filename)}
-                                style={miniDanger}
-                                disabled={busy}
-                                title="Remove attachment"
-                              >
-                                ✕
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <div style={actionsCol}>
-                    <label style={btnSecondary}>
-                      Upload
-                      <input
-                        type="file"
-                        style={{ display: "none" }}
-                        onChange={(e) => {
-                          const f = e.target.files?.[0];
-                          e.currentTarget.value = "";
-                          if (!f) return;
-                          void uploadAttachment(a, f);
-                        }}
-                        disabled={busy}
-                      />
-                    </label>
-
-                    <button style={btnSecondary} onClick={() => openEdit(a)} disabled={busy}>
-                      Edit
-                    </button>
-                    <button style={btnDanger} onClick={() => void remove(a)} disabled={busy}>
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              </article>
-            ))
+              {normalItems.length > 0 && (
+                <>
+                  <div style={sectionDivider}>All Announcements</div>
+                  {normalItems.map(renderAnnouncement)}
+                </>
+              )}
+            </>
           )}
         </section>
 
@@ -480,6 +532,7 @@ function Chip({ active, onClick, label }: { active: boolean; onClick: () => void
         color: active ? "#0b1220" : "#f8fafc",
         fontWeight: 900,
         cursor: "pointer",
+        transition: "all 0.18s ease",
       }}
     >
       {label}
@@ -503,6 +556,31 @@ function Badge({ text, subtle }: { text: string; subtle?: boolean }) {
       }}
     >
       {text}
+    </span>
+  );
+}
+
+function AudienceBadge({ audience }: { audience: Audience }) {
+  const colors: Record<Audience, string> = {
+    all: "#64748b",
+    teachers: "#2563eb",
+    parents: "#16a34a",
+    students: "#d97706",
+  };
+
+  return (
+    <span
+      style={{
+        fontSize: 11,
+        fontWeight: 950,
+        letterSpacing: 0.6,
+        padding: "6px 8px",
+        borderRadius: 999,
+        background: colors[audience],
+        color: "#ffffff",
+      }}
+    >
+      {audience.toUpperCase()}
     </span>
   );
 }
@@ -588,6 +666,19 @@ function formatDate(iso: string) {
   }
 }
 
+function timeAgo(date: string) {
+  const diff = Date.now() - new Date(date).getTime();
+
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  if (hours < 24) return `${hours} hr ago`;
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
 function extractErr(e: unknown, fallback: string) {
   const err = e as {
     response?: { data?: { message?: string; error?: string } | string };
@@ -617,7 +708,8 @@ function isAnnouncement(value: unknown): value is Announcement {
 
 const pageShell: CSSProperties = {
   minHeight: "100vh",
-  background: "linear-gradient(180deg, #0f172a 0%, #111827 45%, #0b1220 100%)",
+  background:
+    "radial-gradient(circle at top right, rgba(59,130,246,0.15), transparent 35%), radial-gradient(circle at top left, rgba(168,85,247,0.10), transparent 30%), linear-gradient(180deg, #0f172a 0%, #111827 45%, #0b1220 100%)",
   color: "#f8fafc",
   padding: 24,
 };
@@ -627,13 +719,47 @@ const page: CSSProperties = {
   margin: "0 auto",
 };
 
-const hero: CSSProperties = {
+const heroCard: CSSProperties = {
+  position: "relative",
+  overflow: "hidden",
+  borderRadius: 24,
+  border: "1px solid rgba(255,255,255,0.12)",
+  background: "linear-gradient(135deg, rgba(15,23,42,0.95), rgba(30,41,59,0.88))",
+  boxShadow: "0 24px 80px rgba(0,0,0,0.28)",
+  marginBottom: 18,
+};
+
+const heroContent: CSSProperties = {
+  position: "relative",
+  zIndex: 2,
   display: "flex",
   justifyContent: "space-between",
   alignItems: "flex-start",
   gap: 16,
   flexWrap: "wrap",
-  marginBottom: 18,
+  padding: 24,
+};
+
+const heroGlowA: CSSProperties = {
+  position: "absolute",
+  width: 240,
+  height: 240,
+  borderRadius: "50%",
+  background: "rgba(59,130,246,0.18)",
+  filter: "blur(40px)",
+  top: -60,
+  right: -20,
+};
+
+const heroGlowB: CSSProperties = {
+  position: "absolute",
+  width: 220,
+  height: 220,
+  borderRadius: "50%",
+  background: "rgba(168,85,247,0.12)",
+  filter: "blur(42px)",
+  bottom: -70,
+  left: -30,
 };
 
 const eyebrow: CSSProperties = {
@@ -673,11 +799,12 @@ const statsGrid: CSSProperties = {
 };
 
 const statCard: CSSProperties = {
-  borderRadius: 16,
-  padding: 14,
+  borderRadius: 18,
+  padding: 16,
   border: "1px solid rgba(255,255,255,0.10)",
   background: "rgba(15,23,42,0.62)",
   backdropFilter: "blur(6px)",
+  boxShadow: "0 10px 30px rgba(0,0,0,0.12)",
 };
 
 const statLabel: CSSProperties = {
@@ -708,6 +835,7 @@ const toolbarLeft: CSSProperties = {
   display: "flex",
   gap: 10,
   flexWrap: "wrap",
+  flex: 1,
 };
 
 const toolbarRight: CSSProperties = {
@@ -718,11 +846,12 @@ const toolbarRight: CSSProperties = {
 
 const panel: CSSProperties = {
   marginTop: 16,
-  borderRadius: 16,
+  borderRadius: 18,
   border: "1px solid rgba(255,255,255,0.10)",
   background: "rgba(15,23,42,0.72)",
   overflow: "hidden",
   backdropFilter: "blur(8px)",
+  boxShadow: "0 18px 50px rgba(0,0,0,0.2)",
 };
 
 const panelHeader: CSSProperties = {
@@ -741,14 +870,45 @@ const panelSubtitle: CSSProperties = {
   fontSize: 13,
 };
 
-const emptyState: CSSProperties = {
-  padding: 20,
+const sectionDivider: CSSProperties = {
+  padding: "12px 16px",
+  fontWeight: 900,
   color: "#cbd5e1",
+  fontSize: 13,
+  borderTop: "1px solid rgba(255,255,255,0.08)",
+  borderBottom: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(255,255,255,0.03)",
+  letterSpacing: 0.4,
+};
+
+const emptyState: CSSProperties = {
+  padding: 28,
+  textAlign: "center",
+  color: "#cbd5e1",
+};
+
+const emptyStateTitle: CSSProperties = {
+  fontSize: 18,
+  fontWeight: 900,
+  color: "#ffffff",
+};
+
+const emptyStateText: CSSProperties = {
+  marginTop: 8,
+  fontSize: 14,
+  opacity: 0.82,
 };
 
 const announcementCard: CSSProperties = {
   padding: 16,
   borderTop: "1px solid rgba(255,255,255,0.08)",
+  transition: "all 0.2s ease",
+};
+
+const pinnedCard: CSSProperties = {
+  borderTop: "1px solid rgba(250,204,21,0.36)",
+  background: "linear-gradient(135deg, rgba(250,204,21,0.10), rgba(15,23,42,0.35))",
+  boxShadow: "inset 0 0 0 1px rgba(250,204,21,0.12)",
 };
 
 const announcementTop: CSSProperties = {
@@ -777,13 +937,25 @@ const announcementBody: CSSProperties = {
   marginTop: 8,
   color: "#e5e7eb",
   whiteSpace: "pre-wrap",
-  lineHeight: 1.5,
+  lineHeight: 1.6,
+};
+
+const metaRow: CSSProperties = {
+  marginTop: 10,
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  flexWrap: "wrap",
 };
 
 const metaText: CSSProperties = {
-  marginTop: 10,
   fontSize: 12,
   color: "#94a3b8",
+};
+
+const metaDot: CSSProperties = {
+  color: "#475569",
+  fontSize: 12,
 };
 
 const attachmentsLabel: CSSProperties = {
@@ -791,7 +963,7 @@ const attachmentsLabel: CSSProperties = {
   opacity: 0.9,
   fontWeight: 800,
   color: "#cbd5e1",
-  marginBottom: 6,
+  marginBottom: 8,
 };
 
 const attachmentWrap: CSSProperties = {
@@ -808,6 +980,10 @@ const attachmentPill: CSSProperties = {
   borderRadius: 999,
   border: "1px solid rgba(255,255,255,0.14)",
   background: "rgba(255,255,255,0.06)",
+};
+
+const attachmentIcon: CSSProperties = {
+  fontSize: 14,
 };
 
 const attachmentLink: CSSProperties = {
@@ -839,7 +1015,7 @@ const modalActions: CSSProperties = {
 const searchInput: CSSProperties = {
   width: "100%",
   maxWidth: 360,
-  padding: "10px 12px",
+  padding: "11px 13px",
   borderRadius: 12,
   border: "1px solid rgba(255,255,255,0.14)",
   background: "rgba(15,23,42,0.82)",
