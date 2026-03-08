@@ -74,13 +74,13 @@ export default function DashboardPage() {
         <ActionCard
           title="Announcements"
           description="Post updates for teachers, parents, and students."
-          onClick={() => router.push("/announcements")}
+          onClick={() => router.push("/dashboard/announcements")}
         />
 
         <ActionCard
           title="Resources"
           description="Upload and organize learning resources and documents."
-          onClick={() => router.push("/resources")}
+          onClick={() => router.push("/dashboard/resources")}
         />
       </section>
 
