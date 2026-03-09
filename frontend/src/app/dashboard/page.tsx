@@ -13,6 +13,12 @@ const modules = [
     accent: "linear-gradient(135deg, #2563eb, #60a5fa)",
   },
   {
+    title: "Students",
+    href: "/dashboard/students",
+    desc: "View student profiles, attendance, finance, and academic records.",
+    icon: "🎓",
+  },
+  {
     title: "Attendance",
     href: "/dashboard/attendance",
     desc: "Track and review student attendance records.",
