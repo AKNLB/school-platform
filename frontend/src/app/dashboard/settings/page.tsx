@@ -95,6 +95,41 @@ export default function SettingsPage() {
     };
   }, [form, settings]);
 
+  const completionChecklist = useMemo(() => {
+    return [
+      { label: "School name", done: Boolean(form.school_name.trim()) },
+      { label: "Address", done: Boolean(form.address.trim()) },
+      { label: "Phone", done: Boolean(form.phone.trim()) },
+      { label: "Email", done: Boolean(form.email.trim()) },
+      { label: "Principal name", done: Boolean(form.principal_name.trim()) },
+      { label: "School logo", done: Boolean(settings?.logo_url) },
+      { label: "Principal signature", done: Boolean(settings?.principal_signature_url) },
+      { label: "Teacher signature", done: Boolean(settings?.teacher_signature_url) },
+    ];
+  }, [form, settings]);
+
+  const brandingSummary = useMemo(() => {
+    const hasLogo = Boolean(settings?.logo_url);
+    const hasPrincipal = Boolean(settings?.principal_signature_url);
+    const hasTeacher = Boolean(settings?.teacher_signature_url);
+
+    if (hasLogo && hasPrincipal && hasTeacher) return "Complete brand pack";
+    if (hasLogo || hasPrincipal || hasTeacher) return "Partially configured";
+    return "Assets missing";
+  }, [settings]);
+
+  const unsavedChanges = useMemo(() => {
+    if (!settings) return false;
+
+    return (
+      form.school_name !== (settings.school_name || "") ||
+      form.address !== (settings.address || "") ||
+      form.phone !== (settings.phone || "") ||
+      form.email !== (settings.email || "") ||
+      form.principal_name !== (settings.principal_name || "")
+    );
+  }, [form, settings]);
+
   async function saveSettings() {
     setSaving(true);
     setErr(null);
@@ -172,6 +207,9 @@ export default function SettingsPage() {
 
   return (
     <div style={pageShell}>
+      <div style={bgGlowOne} />
+      <div style={bgGlowTwo} />
+
       <div style={page}>
         <section style={hero}>
           <div>
@@ -179,8 +217,15 @@ export default function SettingsPage() {
             <h1 style={heroTitle}>Settings</h1>
             <p style={heroText}>
               Control how your school appears across the dashboard, finance receipts,
-              and report cards. Keep your branding clean, official, and ready for print.
+              report cards, and official documents. Keep your identity polished,
+              consistent, and ready for print.
             </p>
+
+            <div style={heroMiniRow}>
+              <HeroMiniBadge label="Completion" value={`${profileStats.pct}%`} />
+              <HeroMiniBadge label="Brand Pack" value={brandingSummary} />
+              <HeroMiniBadge label="Changes" value={unsavedChanges ? "Unsaved edits" : "Saved"} />
+            </div>
           </div>
 
           <div style={heroActions}>
@@ -201,6 +246,44 @@ export default function SettingsPage() {
           <StatCard label="Filled Items" value={`${profileStats.completed}/${profileStats.total}`} accent="green" />
           <StatCard label="Logo" value={settings?.logo_url ? "Added" : "Missing"} accent="purple" />
           <StatCard label="Signatures" value={signatureStatus(settings)} accent="amber" />
+        </section>
+
+        <section style={insightGrid}>
+          <div style={insightCard}>
+            <div style={insightTitle}>Setup Checklist</div>
+            <div style={insightSub}>Track what still needs attention before documents look official.</div>
+
+            <div style={checklistWrap}>
+              {completionChecklist.map((item) => (
+                <div key={item.label} style={checklistRow}>
+                  <div style={checkIcon(item.done)}>{item.done ? "✓" : "•"}</div>
+                  <div style={checkText}>{item.label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={insightCard}>
+            <div style={insightTitle}>Document Readiness</div>
+            <div style={insightSub}>How prepared your school profile is for reports and receipts.</div>
+
+            <div style={progressCard}>
+              <div style={progressTop}>
+                <div style={progressLabel}>Readiness Score</div>
+                <div style={progressValue}>{profileStats.pct}%</div>
+              </div>
+
+              <div style={progressTrack}>
+                <div style={{ ...progressFill, width: `${profileStats.pct}%` }} />
+              </div>
+
+              <div style={progressFoot}>
+                {profileStats.pct >= 100
+                  ? "Everything needed for polished output is in place."
+                  : "Complete the remaining items to improve report cards and finance documents."}
+              </div>
+            </div>
+          </div>
         </section>
 
         {err && (
@@ -227,11 +310,19 @@ export default function SettingsPage() {
               <div style={panelHeader}>
                 <div>
                   <div style={panelTitle}>School Information</div>
-                  <div style={panelSub}>Core details used across the platform.</div>
+                  <div style={panelSub}>Core identity details used across the platform.</div>
                 </div>
               </div>
 
               <div style={panelBody}>
+                <div style={infoTipCard}>
+                  <div style={infoTipTitle}>School Profile Tip</div>
+                  <div style={infoTipText}>
+                    These details power the header area on report cards, financial documents,
+                    and printable school records.
+                  </div>
+                </div>
+
                 <div style={formGrid}>
                   <Field label="School Name" full>
                     <input
@@ -307,6 +398,7 @@ export default function SettingsPage() {
                     buttonLabel={uploadingKind === "logo" ? "Uploading..." : "Upload Logo"}
                     onClick={() => logoInputRef.current?.click()}
                     disabled={uploadingKind !== null}
+                    status={settings?.logo_url ? "Ready" : "Missing"}
                   />
 
                   <AssetCard
@@ -316,6 +408,7 @@ export default function SettingsPage() {
                     buttonLabel={uploadingKind === "principal_signature" ? "Uploading..." : "Upload Signature"}
                     onClick={() => principalSigInputRef.current?.click()}
                     disabled={uploadingKind !== null}
+                    status={settings?.principal_signature_url ? "Ready" : "Missing"}
                   />
 
                   <AssetCard
@@ -325,6 +418,7 @@ export default function SettingsPage() {
                     buttonLabel={uploadingKind === "teacher_signature" ? "Uploading..." : "Upload Signature"}
                     onClick={() => teacherSigInputRef.current?.click()}
                     disabled={uploadingKind !== null}
+                    status={settings?.teacher_signature_url ? "Ready" : "Missing"}
                   />
                 </div>
 
@@ -400,6 +494,7 @@ export default function SettingsPage() {
                   <div style={previewDocTitle}>Official School Document</div>
                   <div style={previewText}>
                     This preview reflects your report card and finance document header style.
+                    Add your logo and signatures to make all exports feel complete and premium.
                   </div>
 
                   <div style={signaturePreviewRow}>
@@ -412,6 +507,22 @@ export default function SettingsPage() {
                       src={settings?.principal_signature_url || null}
                     />
                   </div>
+                </div>
+              </section>
+
+              <section style={panel}>
+                <div style={panelHeader}>
+                  <div>
+                    <div style={panelTitle}>Contact Snapshot</div>
+                    <div style={panelSub}>Quick view of the school’s public-facing details.</div>
+                  </div>
+                </div>
+
+                <div style={snapshotGrid}>
+                  <SnapshotTile label="School Name" value={form.school_name || "--"} />
+                  <SnapshotTile label="Principal" value={form.principal_name || "--"} />
+                  <SnapshotTile label="Phone" value={form.phone || "--"} />
+                  <SnapshotTile label="Email" value={form.email || "--"} />
                 </div>
               </section>
             </section>
@@ -429,6 +540,7 @@ function AssetCard({
   buttonLabel,
   onClick,
   disabled,
+  status,
 }: {
   title: string;
   subtitle: string;
@@ -436,19 +548,25 @@ function AssetCard({
   buttonLabel: string;
   onClick: () => void;
   disabled?: boolean;
+  status: string;
 }) {
   return (
     <div style={assetCard}>
-      <div style={assetPreview}>
-        {imageUrl ? (
-          <img src={imageUrl} alt={title} style={assetImage} />
-        ) : (
-          <div style={assetPlaceholder}>No file</div>
-        )}
-      </div>
+      <div style={assetTopRow}>
+        <div style={assetPreview}>
+          {imageUrl ? (
+            <img src={imageUrl} alt={title} style={assetImage} />
+          ) : (
+            <div style={assetPlaceholder}>No file</div>
+          )}
+        </div>
 
-      <div style={assetTitle}>{title}</div>
-      <div style={assetSubtitle}>{subtitle}</div>
+        <div style={{ flex: 1 }}>
+          <div style={assetTitle}>{title}</div>
+          <div style={assetSubtitle}>{subtitle}</div>
+          <div style={assetStatus(imageUrl ? true : false)}>{status}</div>
+        </div>
+      </div>
 
       <button onClick={onClick} style={btnSecondary} disabled={disabled}>
         {buttonLabel}
@@ -464,6 +582,24 @@ function SignaturePreview({ label, src }: { label: string; src: string | null })
         {src ? <img src={src} alt={label} style={signatureImage} /> : null}
       </div>
       <div style={signatureLabel}>{label}</div>
+    </div>
+  );
+}
+
+function SnapshotTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={snapshotTile}>
+      <div style={snapshotLabel}>{label}</div>
+      <div style={snapshotValue}>{value}</div>
+    </div>
+  );
+}
+
+function HeroMiniBadge({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={heroMiniBadge}>
+      <div style={heroMiniLabel}>{label}</div>
+      <div style={heroMiniValue}>{value}</div>
     </div>
   );
 }
@@ -553,11 +689,37 @@ const pageShell: CSSProperties = {
   background: "linear-gradient(180deg, #0f172a 0%, #111827 45%, #0b1220 100%)",
   color: "#f8fafc",
   padding: 24,
+  position: "relative",
+  overflow: "hidden",
+};
+
+const bgGlowOne: CSSProperties = {
+  position: "absolute",
+  top: -120,
+  right: -100,
+  width: 320,
+  height: 320,
+  borderRadius: "50%",
+  background: "radial-gradient(circle, rgba(59,130,246,0.22), transparent 70%)",
+  pointerEvents: "none",
+};
+
+const bgGlowTwo: CSSProperties = {
+  position: "absolute",
+  bottom: -160,
+  left: -120,
+  width: 360,
+  height: 360,
+  borderRadius: "50%",
+  background: "radial-gradient(circle, rgba(168,85,247,0.16), transparent 70%)",
+  pointerEvents: "none",
 };
 
 const page: CSSProperties = {
   maxWidth: 1400,
   margin: "0 auto",
+  position: "relative",
+  zIndex: 1,
 };
 
 const hero: CSSProperties = {
@@ -597,11 +759,148 @@ const heroActions: CSSProperties = {
   flexWrap: "wrap",
 };
 
+const heroMiniRow: CSSProperties = {
+  display: "flex",
+  gap: 10,
+  flexWrap: "wrap",
+  marginTop: 16,
+};
+
+const heroMiniBadge: CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.05)",
+};
+
+const heroMiniLabel: CSSProperties = {
+  fontSize: 11,
+  color: "#94a3b8",
+  fontWeight: 800,
+  textTransform: "uppercase",
+  letterSpacing: 0.6,
+};
+
+const heroMiniValue: CSSProperties = {
+  fontSize: 14,
+  color: "#fff",
+  fontWeight: 900,
+  marginTop: 4,
+};
+
 const statsGrid: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
   gap: 12,
   marginBottom: 18,
+};
+
+const insightGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 16,
+  marginBottom: 18,
+};
+
+const insightCard: CSSProperties = {
+  borderRadius: 18,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(15,23,42,0.72)",
+  backdropFilter: "blur(10px)",
+  padding: 16,
+};
+
+const insightTitle: CSSProperties = {
+  fontSize: 17,
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const insightSub: CSSProperties = {
+  marginTop: 4,
+  fontSize: 13,
+  color: "#94a3b8",
+};
+
+const checklistWrap: CSSProperties = {
+  display: "grid",
+  gap: 10,
+  marginTop: 14,
+};
+
+const checklistRow: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  padding: "10px 12px",
+  borderRadius: 12,
+  background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.08)",
+};
+
+const checkIcon = (done: boolean): CSSProperties => ({
+  width: 28,
+  height: 28,
+  borderRadius: 999,
+  display: "grid",
+  placeItems: "center",
+  fontWeight: 900,
+  background: done ? "rgba(34,197,94,0.16)" : "rgba(148,163,184,0.14)",
+  color: done ? "#bbf7d0" : "#cbd5e1",
+  border: done ? "1px solid rgba(34,197,94,0.28)" : "1px solid rgba(148,163,184,0.24)",
+});
+
+const checkText: CSSProperties = {
+  color: "#e5e7eb",
+  fontWeight: 700,
+};
+
+const progressCard: CSSProperties = {
+  marginTop: 14,
+  borderRadius: 16,
+  border: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(255,255,255,0.04)",
+  padding: 14,
+};
+
+const progressTop: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "center",
+};
+
+const progressLabel: CSSProperties = {
+  fontSize: 13,
+  color: "#cbd5e1",
+  fontWeight: 800,
+};
+
+const progressValue: CSSProperties = {
+  fontSize: 20,
+  color: "#fff",
+  fontWeight: 900,
+};
+
+const progressTrack: CSSProperties = {
+  marginTop: 12,
+  height: 12,
+  borderRadius: 999,
+  background: "rgba(255,255,255,0.08)",
+  overflow: "hidden",
+};
+
+const progressFill: CSSProperties = {
+  height: "100%",
+  borderRadius: 999,
+  background: "linear-gradient(90deg, rgba(59,130,246,0.95), rgba(168,85,247,0.95))",
+};
+
+const progressFoot: CSSProperties = {
+  marginTop: 12,
+  color: "#94a3b8",
+  fontSize: 13,
+  lineHeight: 1.5,
 };
 
 const statCard: CSSProperties = {
@@ -667,6 +966,27 @@ const panelBody: CSSProperties = {
   padding: 16,
 };
 
+const infoTipCard: CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 14,
+  border: "1px solid rgba(96,165,250,0.18)",
+  background: "rgba(96,165,250,0.08)",
+  marginBottom: 14,
+};
+
+const infoTipTitle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 900,
+  color: "#dbeafe",
+  marginBottom: 6,
+};
+
+const infoTipText: CSSProperties = {
+  fontSize: 13,
+  color: "#cbd5e1",
+  lineHeight: 1.5,
+};
+
 const formGrid: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "1fr 1fr",
@@ -709,17 +1029,25 @@ const assetCard: CSSProperties = {
   background: "rgba(255,255,255,0.04)",
   padding: 14,
   display: "grid",
-  gap: 10,
+  gap: 12,
+};
+
+const assetTopRow: CSSProperties = {
+  display: "flex",
+  gap: 12,
+  alignItems: "flex-start",
 };
 
 const assetPreview: CSSProperties = {
-  height: 130,
+  width: 120,
+  height: 100,
   borderRadius: 12,
   border: "1px dashed rgba(255,255,255,0.12)",
   background: "rgba(15,23,42,0.7)",
   display: "grid",
   placeItems: "center",
   overflow: "hidden",
+  flexShrink: 0,
 };
 
 const assetImage: CSSProperties = {
@@ -744,7 +1072,21 @@ const assetSubtitle: CSSProperties = {
   color: "#cbd5e1",
   fontSize: 13,
   lineHeight: 1.45,
+  marginTop: 4,
 };
+
+const assetStatus = (ready: boolean): CSSProperties => ({
+  marginTop: 10,
+  display: "inline-flex",
+  alignItems: "center",
+  padding: "6px 10px",
+  borderRadius: 999,
+  fontWeight: 800,
+  fontSize: 12,
+  background: ready ? "rgba(34,197,94,0.16)" : "rgba(245,158,11,0.16)",
+  color: ready ? "#bbf7d0" : "#fde68a",
+  border: ready ? "1px solid rgba(34,197,94,0.28)" : "1px solid rgba(245,158,11,0.28)",
+});
 
 const previewCard: CSSProperties = {
   padding: 16,
@@ -846,6 +1188,34 @@ const signatureLabel: CSSProperties = {
   color: "#cbd5e1",
   fontSize: 13,
   fontWeight: 700,
+};
+
+const snapshotGrid: CSSProperties = {
+  padding: 16,
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 12,
+};
+
+const snapshotTile: CSSProperties = {
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(255,255,255,0.04)",
+  padding: 14,
+};
+
+const snapshotLabel: CSSProperties = {
+  fontSize: 12,
+  color: "#94a3b8",
+  fontWeight: 800,
+  textTransform: "uppercase",
+};
+
+const snapshotValue: CSSProperties = {
+  marginTop: 8,
+  color: "#fff",
+  fontWeight: 900,
+  lineHeight: 1.5,
 };
 
 const btnPrimary: CSSProperties = {
