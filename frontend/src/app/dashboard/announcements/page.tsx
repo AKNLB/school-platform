@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 
 type Audience = "all" | "teachers" | "parents" | "students";
+type SortValue = "newest" | "oldest" | "title" | "audience";
 
 type Attachment = {
   filename: string;
@@ -40,10 +41,12 @@ export default function AnnouncementsPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
   const [audience, setAudience] = useState<Audience | "">("");
   const [pinnedOnly, setPinnedOnly] = useState(false);
   const [q, setQ] = useState("");
+  const [sortBy, setSortBy] = useState<SortValue>("newest");
 
   const [items, setItems] = useState<Announcement[]>([]);
 
@@ -78,14 +81,35 @@ export default function AnnouncementsPage() {
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    if (!needle) return items;
 
-    return items.filter((a) => {
+    let list = items.filter((a) => {
+      if (!needle) return true;
       const t = (a.title || "").toLowerCase();
       const d = (a.description || "").toLowerCase();
-      return t.includes(needle) || d.includes(needle);
+      const aud = (a.audience || "").toLowerCase();
+      return t.includes(needle) || d.includes(needle) || aud.includes(needle);
     });
-  }, [q, items]);
+
+    list = [...list].sort((a, b) => {
+      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+
+      if (sortBy === "oldest") {
+        return String(a.created_at || "").localeCompare(String(b.created_at || ""));
+      }
+
+      if (sortBy === "title") {
+        return String(a.title || "").localeCompare(String(b.title || ""));
+      }
+
+      if (sortBy === "audience") {
+        return String(a.audience || "").localeCompare(String(b.audience || ""));
+      }
+
+      return String(b.created_at || "").localeCompare(String(a.created_at || ""));
+    });
+
+    return list;
+  }, [q, items, sortBy]);
 
   const stats = useMemo(() => {
     const total = items.length;
@@ -93,17 +117,27 @@ export default function AnnouncementsPage() {
     const teacher = items.filter((x) => x.audience === "teachers").length;
     const parent = items.filter((x) => x.audience === "parents").length;
     const student = items.filter((x) => x.audience === "students").length;
+    const allAudience = items.filter((x) => x.audience === "all").length;
+    const attachments = items.reduce((sum, item) => sum + (item.attachments?.length || 0), 0);
 
-    return { total, pinned, teacher, parent, student };
+    return { total, pinned, teacher, parent, student, allAudience, attachments };
   }, [items]);
 
   const pinnedItems = useMemo(() => filtered.filter((x) => x.pinned), [filtered]);
   const normalItems = useMemo(() => filtered.filter((x) => !x.pinned), [filtered]);
 
-  function openCreate() {
+  const recentHighlights = useMemo(() => {
+    return [...items]
+      .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))
+      .slice(0, 4);
+  }, [items]);
+
+  const hasActiveFilters = Boolean(audience || pinnedOnly || q.trim() || sortBy !== "newest");
+
+  function openCreate(prefill?: Partial<Upsert>) {
     setMode("create");
     setEditing(null);
-    setForm(emptyForm);
+    setForm({ ...emptyForm, ...prefill });
     setFormError(null);
     setOpen(true);
   }
@@ -126,14 +160,25 @@ export default function AnnouncementsPage() {
     setOpen(false);
   }
 
+  function clearFilters() {
+    setAudience("");
+    setPinnedOnly(false);
+    setQ("");
+    setSortBy("newest");
+  }
+
   function validate(p: Upsert): string | null {
     if (!p.title.trim()) return "Title is required.";
     if (!p.description.trim()) return "Description is required.";
+    if (p.title.trim().length < 4) return "Title must be at least 4 characters.";
+    if (p.description.trim().length < 10) return "Message should be at least 10 characters.";
     return null;
   }
 
   async function submit() {
     setFormError(null);
+    setErr(null);
+    setSuccess(null);
 
     const v = validate(form);
     if (v) {
@@ -153,6 +198,8 @@ export default function AnnouncementsPage() {
         } else {
           await load();
         }
+
+        setSuccess("Announcement created successfully.");
       } else {
         if (!editing?.id) throw new Error("No announcement selected.");
 
@@ -164,6 +211,8 @@ export default function AnnouncementsPage() {
         } else {
           await load();
         }
+
+        setSuccess("Announcement updated successfully.");
       }
 
       setOpen(false);
@@ -180,12 +229,14 @@ export default function AnnouncementsPage() {
 
     setBusy(true);
     setErr(null);
+    setSuccess(null);
 
     const prev = items;
     setItems((p) => p.filter((x) => x.id !== a.id));
 
     try {
       await api.delete(`/announcements/${a.id}`);
+      setSuccess("Announcement deleted.");
     } catch (e: unknown) {
       setItems(prev);
       setErr(extractErr(e, "Delete failed"));
@@ -197,6 +248,7 @@ export default function AnnouncementsPage() {
   async function uploadAttachment(a: Announcement, file: File) {
     setBusy(true);
     setErr(null);
+    setSuccess(null);
 
     try {
       const fd = new FormData();
@@ -212,6 +264,8 @@ export default function AnnouncementsPage() {
       } else {
         await load();
       }
+
+      setSuccess("Attachment uploaded.");
     } catch (e: unknown) {
       setErr(extractErr(e, "Upload failed"));
     } finally {
@@ -225,6 +279,7 @@ export default function AnnouncementsPage() {
 
     setBusy(true);
     setErr(null);
+    setSuccess(null);
 
     try {
       const res = await api.delete(`/announcements/${a.id}/attachments/${encodeURIComponent(filename)}`);
@@ -235,6 +290,8 @@ export default function AnnouncementsPage() {
       } else {
         await load();
       }
+
+      setSuccess("Attachment removed.");
     } catch (e: unknown) {
       setErr(extractErr(e, "Remove attachment failed"));
     } finally {
@@ -242,7 +299,43 @@ export default function AnnouncementsPage() {
     }
   }
 
+  async function quickTogglePinned(a: Announcement) {
+    setBusy(true);
+    setErr(null);
+    setSuccess(null);
+
+    const prev = items;
+    const nextPinned = !a.pinned;
+
+    setItems((current) =>
+      current.map((x) => (x.id === a.id ? { ...x, pinned: nextPinned } : x))
+    );
+
+    try {
+      const res = await api.put(`/announcements/${a.id}`, {
+        title: a.title,
+        description: a.description,
+        audience: a.audience,
+        pinned: nextPinned,
+      });
+
+      const updated = isAnnouncement(res?.data) ? res.data : null;
+      if (updated?.id) {
+        setItems((current) => current.map((x) => (x.id === updated.id ? updated : x)));
+      }
+
+      setSuccess(nextPinned ? "Announcement pinned." : "Announcement unpinned.");
+    } catch (e: unknown) {
+      setItems(prev);
+      setErr(extractErr(e, "Pin update failed"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function renderAnnouncement(a: Announcement) {
+    const attachmentCount = a.attachments?.length || 0;
+
     return (
       <article
         key={a.id}
@@ -265,20 +358,19 @@ export default function AnnouncementsPage() {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={announcementTitleRow}>
               <h3 style={announcementTitle}>{a.title}</h3>
-
               {a.pinned && <Badge text="PINNED" />}
-
               <AudienceBadge audience={a.audience} />
+              {attachmentCount > 0 ? <Badge text={`${attachmentCount} ATTACHMENT${attachmentCount > 1 ? "S" : ""}`} subtle /> : null}
             </div>
 
             <div style={announcementBody}>{a.description}</div>
 
             <div style={metaRow}>
-              <span style={metaText}>
-                {a.created_at ? formatDate(a.created_at) : "Date unavailable"}
-              </span>
+              <span style={metaText}>{a.created_at ? formatDate(a.created_at) : "Date unavailable"}</span>
               {a.created_at ? <span style={metaDot}>•</span> : null}
               {a.created_at ? <span style={metaText}>{timeAgo(a.created_at)}</span> : null}
+              {a.created_by_user_id ? <span style={metaDot}>•</span> : null}
+              {a.created_by_user_id ? <span style={metaText}>Author ID: {a.created_by_user_id}</span> : null}
             </div>
 
             {a.attachments?.length ? (
@@ -307,6 +399,14 @@ export default function AnnouncementsPage() {
           </div>
 
           <div style={actionsCol}>
+            <button
+              style={a.pinned ? btnPrimary : btnSecondary}
+              onClick={() => void quickTogglePinned(a)}
+              disabled={busy}
+            >
+              {a.pinned ? "Unpin" : "Pin"}
+            </button>
+
             <label style={btnSecondary}>
               Upload
               <input
@@ -334,6 +434,8 @@ export default function AnnouncementsPage() {
     );
   }
 
+  const messageLength = form.description.trim().length;
+
   return (
     <div style={pageShell}>
       <div style={page}>
@@ -346,14 +448,25 @@ export default function AnnouncementsPage() {
               <div style={eyebrow}>School Platform</div>
               <h1 style={heroTitle}>Announcements</h1>
               <p style={subtitle}>
-                Share updates with teachers, parents, and students from one polished
-                communication hub.
+                Share updates with teachers, parents, and students from one polished communication hub.
               </p>
+
+              <div style={heroMiniStats}>
+                <HeroMiniBadge label="Published" value={String(stats.total)} />
+                <HeroMiniBadge label="Pinned" value={String(stats.pinned)} />
+                <HeroMiniBadge label="Attachments" value={String(stats.attachments)} />
+              </div>
             </div>
 
             <div style={heroActions}>
               <button onClick={() => void load()} style={btnSecondary} disabled={loading || busy}>
                 Refresh
+              </button>
+              <button onClick={() => openCreate({ audience: "teachers" })} style={btnSecondary} disabled={busy}>
+                Teachers Update
+              </button>
+              <button onClick={() => openCreate({ audience: "parents" })} style={btnSecondary} disabled={busy}>
+                Parents Update
               </button>
               <button onClick={openCreate} style={btnPrimary} disabled={busy}>
                 + New Announcement
@@ -365,9 +478,61 @@ export default function AnnouncementsPage() {
         <section style={statsGrid}>
           <StatCard label="Total" value={stats.total} />
           <StatCard label="Pinned" value={stats.pinned} />
+          <StatCard label="All Audience" value={stats.allAudience} />
           <StatCard label="Teachers" value={stats.teacher} />
           <StatCard label="Parents" value={stats.parent} />
           <StatCard label="Students" value={stats.student} />
+        </section>
+
+        <section style={insightGrid}>
+          <div style={insightCard}>
+            <div style={insightTitle}>Recent Highlights</div>
+            <div style={insightSub}>Latest posts across the communication hub</div>
+
+            {recentHighlights.length === 0 ? (
+              <div style={emptyMini}>No recent announcements yet.</div>
+            ) : (
+              <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+                {recentHighlights.map((item) => (
+                  <button
+                    key={item.id}
+                    style={highlightRowBtn}
+                    onClick={() => openEdit(item)}
+                  >
+                    <div style={highlightRow}>
+                      <div style={highlightIcon}>{item.pinned ? "📌" : "📣"}</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={highlightTitle}>{item.title}</div>
+                        <div style={highlightMeta}>
+                          {titleizeAudience(item.audience)} • {item.created_at ? timeAgo(item.created_at) : "--"}
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={insightCard}>
+            <div style={insightTitle}>Quick Posting Lanes</div>
+            <div style={insightSub}>Start with the most common communication flows</div>
+
+            <div style={quickPostGrid}>
+              <button style={quickPostBtn} onClick={() => openCreate({ audience: "all", pinned: true })}>
+                📌 Urgent School-wide
+              </button>
+              <button style={quickPostBtn} onClick={() => openCreate({ audience: "teachers" })}>
+                👩‍🏫 Staff Notice
+              </button>
+              <button style={quickPostBtn} onClick={() => openCreate({ audience: "parents" })}>
+                👨‍👩‍👧 Parent Update
+              </button>
+              <button style={quickPostBtn} onClick={() => openCreate({ audience: "students" })}>
+                🎓 Student Notice
+              </button>
+            </div>
+          </div>
         </section>
 
         <section style={toolbar}>
@@ -375,9 +540,16 @@ export default function AnnouncementsPage() {
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="Search title or message..."
+              placeholder="Search title, message, or audience..."
               style={searchInput}
             />
+
+            <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortValue)} style={selectInput}>
+              <option value="newest">Sort: Newest</option>
+              <option value="oldest">Sort: Oldest</option>
+              <option value="title">Sort: Title</option>
+              <option value="audience">Sort: Audience</option>
+            </select>
           </div>
 
           <div style={toolbarRight}>
@@ -391,11 +563,23 @@ export default function AnnouncementsPage() {
               onClick={() => setPinnedOnly((p) => !p)}
               label={pinnedOnly ? "Pinned only ✓" : "Pinned only"}
             />
+            <button onClick={clearFilters} style={btnSecondary} disabled={busy}>
+              Clear
+            </button>
           </div>
         </section>
 
+        {hasActiveFilters && (
+          <div style={chipBar}>
+            {q.trim() ? <ActiveChip label={`Search: ${q.trim()}`} onRemove={() => setQ("")} /> : null}
+            {audience ? <ActiveChip label={`Audience: ${titleizeAudience(audience)}`} onRemove={() => setAudience("")} /> : null}
+            {pinnedOnly ? <ActiveChip label="Pinned only" onRemove={() => setPinnedOnly(false)} /> : null}
+            {sortBy !== "newest" ? <ActiveChip label={`Sort: ${sortLabel(sortBy)}`} onRemove={() => setSortBy("newest")} /> : null}
+          </div>
+        )}
+
         {err && (
-          <div style={alert}>
+          <div style={alertError}>
             <b style={{ marginRight: 8 }}>Error:</b>
             {err}
             <button
@@ -408,12 +592,25 @@ export default function AnnouncementsPage() {
           </div>
         )}
 
+        {success && (
+          <div style={alertSuccess}>
+            <b style={{ marginRight: 8 }}>Success:</b>
+            {success}
+          </div>
+        )}
+
         <section style={panel}>
           <div style={panelHeader}>
-            <div>
-              <div style={panelTitle}>Announcement Feed</div>
-              <div style={panelSubtitle}>
-                {loading ? "Loading..." : `${filtered.length} result(s) shown`}
+            <div style={panelHeaderTop}>
+              <div>
+                <div style={panelTitle}>Announcement Feed</div>
+                <div style={panelSubtitle}>
+                  {loading ? "Loading..." : `${filtered.length} result(s) shown`}
+                </div>
+              </div>
+
+              <div style={resultPill}>
+                {filtered.length} visible
               </div>
             </div>
           </div>
@@ -425,9 +622,19 @@ export default function AnnouncementsPage() {
             </div>
           ) : filtered.length === 0 ? (
             <div style={emptyState}>
-              <div style={emptyStateTitle}>No announcements yet</div>
+              <div style={emptyStateIcon}>📣</div>
+              <div style={emptyStateTitle}>No announcements found</div>
               <div style={emptyStateText}>
-                Click <b>+ New Announcement</b> to post the first update.
+                Try changing filters, clearing the search, or creating a new update for your school community.
+              </div>
+
+              <div style={emptyStateActions}>
+                <button onClick={clearFilters} style={btnSecondary}>
+                  Clear Filters
+                </button>
+                <button onClick={openCreate} style={btnPrimary}>
+                  + New Announcement
+                </button>
               </div>
             </div>
           ) : (
@@ -451,7 +658,14 @@ export default function AnnouncementsPage() {
 
         {open && (
           <Modal title={mode === "create" ? "New Announcement" : "Edit Announcement"} onClose={closeModal}>
-            {formError && <div style={{ ...alert, marginTop: 0 }}>{formError}</div>}
+            {formError && <div style={{ ...alertError, marginTop: 0 }}>{formError}</div>}
+
+            <div style={composeCard}>
+              <div style={composeTitle}>Compose</div>
+              <div style={composeSub}>
+                Write clear updates for the right audience and pin important notices to the top.
+              </div>
+            </div>
 
             <div style={formGrid}>
               <Field label="Title" full>
@@ -488,7 +702,7 @@ export default function AnnouncementsPage() {
 
               <Field label="Message" full>
                 <textarea
-                  style={{ ...fieldInput, minHeight: 160, resize: "vertical" }}
+                  style={{ ...fieldInput, minHeight: 170, resize: "vertical" }}
                   value={form.description}
                   onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
                   placeholder="Write the announcement..."
@@ -496,13 +710,19 @@ export default function AnnouncementsPage() {
               </Field>
             </div>
 
-            <div style={modalActions}>
-              <button style={btnSecondary} onClick={closeModal} disabled={busy}>
-                Cancel
-              </button>
-              <button style={btnPrimary} onClick={() => void submit()} disabled={busy}>
-                {busy ? "Saving..." : "Save"}
-              </button>
+            <div style={composeFooter}>
+              <div style={composeHint}>
+                Audience: <b>{titleizeAudience(form.audience)}</b> • Message length: <b>{messageLength}</b>
+              </div>
+
+              <div style={modalActions}>
+                <button style={btnSecondary} onClick={closeModal} disabled={busy}>
+                  Cancel
+                </button>
+                <button style={btnPrimary} onClick={() => void submit()} disabled={busy}>
+                  {busy ? "Saving..." : mode === "create" ? "Publish" : "Save Changes"}
+                </button>
+              </div>
             </div>
           </Modal>
         )}
@@ -516,6 +736,15 @@ function StatCard({ label, value }: { label: string; value: number }) {
     <div style={statCard}>
       <div style={statLabel}>{label}</div>
       <div style={statValue}>{value}</div>
+    </div>
+  );
+}
+
+function HeroMiniBadge({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={heroMiniBadge}>
+      <div style={heroMiniLabel}>{label}</div>
+      <div style={heroMiniValue}>{value}</div>
     </div>
   );
 }
@@ -537,6 +766,17 @@ function Chip({ active, onClick, label }: { active: boolean; onClick: () => void
     >
       {label}
     </button>
+  );
+}
+
+function ActiveChip({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return (
+    <div style={activeChip}>
+      <span>{label}</span>
+      <button onClick={onRemove} style={activeChipBtn}>
+        ✕
+      </button>
+    </div>
   );
 }
 
@@ -610,7 +850,7 @@ function Modal({
       <div
         onMouseDown={(e) => e.stopPropagation()}
         style={{
-          width: "min(900px, 100%)",
+          width: "min(920px, 100%)",
           borderRadius: 16,
           border: "1px solid rgba(255,255,255,0.12)",
           background: "#0f172a",
@@ -677,6 +917,19 @@ function timeAgo(date: string) {
   if (minutes < 60) return `${minutes} min ago`;
   if (hours < 24) return `${hours} hr ago`;
   return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+function titleizeAudience(audience: Audience | "") {
+  if (!audience) return "All audiences";
+  if (audience === "all") return "All";
+  return audience.charAt(0).toUpperCase() + audience.slice(1);
+}
+
+function sortLabel(value: SortValue) {
+  if (value === "newest") return "Newest";
+  if (value === "oldest") return "Oldest";
+  if (value === "title") return "Title";
+  return "Audience";
 }
 
 function extractErr(e: unknown, fallback: string) {
@@ -791,11 +1044,127 @@ const heroActions: CSSProperties = {
   flexWrap: "wrap",
 };
 
+const heroMiniStats: CSSProperties = {
+  display: "flex",
+  gap: 10,
+  flexWrap: "wrap",
+  marginTop: 16,
+};
+
+const heroMiniBadge: CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.05)",
+};
+
+const heroMiniLabel: CSSProperties = {
+  fontSize: 11,
+  color: "#94a3b8",
+  fontWeight: 800,
+  textTransform: "uppercase",
+  letterSpacing: 0.6,
+};
+
+const heroMiniValue: CSSProperties = {
+  fontSize: 14,
+  color: "#fff",
+  fontWeight: 900,
+  marginTop: 4,
+};
+
 const statsGrid: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
   gap: 12,
   marginBottom: 18,
+};
+
+const insightGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 16,
+  marginBottom: 18,
+};
+
+const insightCard: CSSProperties = {
+  borderRadius: 18,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(15,23,42,0.62)",
+  backdropFilter: "blur(6px)",
+  boxShadow: "0 10px 30px rgba(0,0,0,0.12)",
+  padding: 16,
+};
+
+const insightTitle: CSSProperties = {
+  fontSize: 17,
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const insightSub: CSSProperties = {
+  marginTop: 4,
+  fontSize: 13,
+  color: "#94a3b8",
+};
+
+const highlightRowBtn: CSSProperties = {
+  border: "none",
+  background: "transparent",
+  padding: 0,
+  textAlign: "left",
+  cursor: "pointer",
+};
+
+const highlightRow: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+  padding: "12px 14px",
+  borderRadius: 14,
+  background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.08)",
+};
+
+const highlightIcon: CSSProperties = {
+  width: 40,
+  height: 40,
+  borderRadius: 12,
+  display: "grid",
+  placeItems: "center",
+  background: "rgba(96,165,250,0.14)",
+  fontSize: 18,
+  flexShrink: 0,
+};
+
+const highlightTitle: CSSProperties = {
+  fontSize: 14,
+  fontWeight: 800,
+  color: "#fff",
+};
+
+const highlightMeta: CSSProperties = {
+  marginTop: 4,
+  fontSize: 12,
+  color: "#94a3b8",
+};
+
+const quickPostGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 10,
+  marginTop: 14,
+};
+
+const quickPostBtn: CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.05)",
+  color: "#fff",
+  fontWeight: 800,
+  cursor: "pointer",
+  textAlign: "left",
 };
 
 const statCard: CSSProperties = {
@@ -828,7 +1197,7 @@ const toolbar: CSSProperties = {
   alignItems: "center",
   gap: 12,
   flexWrap: "wrap",
-  marginBottom: 16,
+  marginBottom: 8,
 };
 
 const toolbarLeft: CSSProperties = {
@@ -842,6 +1211,37 @@ const toolbarRight: CSSProperties = {
   display: "flex",
   gap: 10,
   flexWrap: "wrap",
+};
+
+const chipBar: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  flexWrap: "wrap",
+  marginBottom: 16,
+};
+
+const activeChip: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "8px 10px",
+  borderRadius: 999,
+  border: "1px solid rgba(96,165,250,0.22)",
+  background: "rgba(96,165,250,0.12)",
+  color: "#dbeafe",
+  fontSize: 12,
+  fontWeight: 800,
+};
+
+const activeChipBtn: CSSProperties = {
+  width: 22,
+  height: 22,
+  borderRadius: 999,
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "rgba(255,255,255,0.08)",
+  color: "#fff",
+  cursor: "pointer",
+  fontWeight: 900,
 };
 
 const panel: CSSProperties = {
@@ -859,6 +1259,14 @@ const panelHeader: CSSProperties = {
   borderBottom: "1px solid rgba(255,255,255,0.08)",
 };
 
+const panelHeaderTop: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "center",
+  flexWrap: "wrap",
+};
+
 const panelTitle: CSSProperties = {
   fontWeight: 900,
   fontSize: 18,
@@ -868,6 +1276,16 @@ const panelSubtitle: CSSProperties = {
   marginTop: 6,
   color: "#94a3b8",
   fontSize: 13,
+};
+
+const resultPill: CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 999,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.05)",
+  color: "#e2e8f0",
+  fontSize: 12,
+  fontWeight: 800,
 };
 
 const sectionDivider: CSSProperties = {
@@ -887,10 +1305,15 @@ const emptyState: CSSProperties = {
   color: "#cbd5e1",
 };
 
+const emptyStateIcon: CSSProperties = {
+  fontSize: 34,
+};
+
 const emptyStateTitle: CSSProperties = {
   fontSize: 18,
   fontWeight: 900,
   color: "#ffffff",
+  marginTop: 12,
 };
 
 const emptyStateText: CSSProperties = {
@@ -899,10 +1322,24 @@ const emptyStateText: CSSProperties = {
   opacity: 0.82,
 };
 
+const emptyStateActions: CSSProperties = {
+  display: "flex",
+  justifyContent: "center",
+  gap: 10,
+  flexWrap: "wrap",
+  marginTop: 18,
+};
+
+const emptyMini: CSSProperties = {
+  padding: "10px 0",
+  color: "#cbd5e1",
+};
+
 const announcementCard: CSSProperties = {
   padding: 16,
   borderTop: "1px solid rgba(255,255,255,0.08)",
   transition: "all 0.2s ease",
+  borderColor: "rgba(255,255,255,0.08)",
 };
 
 const pinnedCard: CSSProperties = {
@@ -999,22 +1436,65 @@ const actionsCol: CSSProperties = {
   justifyContent: "flex-end",
 };
 
+const composeCard: CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 14,
+  border: "1px solid rgba(96,165,250,0.18)",
+  background: "rgba(96,165,250,0.08)",
+  marginBottom: 14,
+};
+
+const composeTitle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 900,
+  color: "#dbeafe",
+  marginBottom: 6,
+};
+
+const composeSub: CSSProperties = {
+  fontSize: 13,
+  color: "#cbd5e1",
+  lineHeight: 1.5,
+};
+
 const formGrid: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "1fr 1fr",
   gap: 12,
 };
 
+const composeFooter: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "center",
+  flexWrap: "wrap",
+  marginTop: 14,
+};
+
+const composeHint: CSSProperties = {
+  fontSize: 13,
+  color: "#cbd5e1",
+};
+
 const modalActions: CSSProperties = {
   display: "flex",
   justifyContent: "flex-end",
   gap: 10,
-  marginTop: 14,
 };
 
 const searchInput: CSSProperties = {
   width: "100%",
   maxWidth: 360,
+  padding: "11px 13px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.14)",
+  background: "rgba(15,23,42,0.82)",
+  color: "#fff",
+  outline: "none",
+};
+
+const selectInput: CSSProperties = {
   padding: "11px 13px",
   borderRadius: 12,
   border: "1px solid rgba(255,255,255,0.14)",
@@ -1073,13 +1553,22 @@ const iconBtn: CSSProperties = {
   cursor: "pointer",
 };
 
-const alert: CSSProperties = {
+const alertError: CSSProperties = {
   marginTop: 14,
   padding: "10px 12px",
   borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.14)",
-  background: "rgba(255,255,255,0.06)",
-  color: "#f8fafc",
+  border: "1px solid rgba(239,68,68,0.22)",
+  background: "rgba(127,29,29,0.24)",
+  color: "#fecaca",
+};
+
+const alertSuccess: CSSProperties = {
+  marginTop: 14,
+  padding: "10px 12px",
+  borderRadius: 12,
+  border: "1px solid rgba(34,197,94,0.22)",
+  background: "rgba(20,83,45,0.24)",
+  color: "#bbf7d0",
 };
 
 const miniDanger: CSSProperties = {
