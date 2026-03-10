@@ -13,6 +13,7 @@ type Student = {
 };
 
 type AttendanceStatus = "present" | "absent" | "late" | "excused";
+type QuickFilter = "all" | AttendanceStatus;
 
 type AttendanceRecord = {
   id?: number;
@@ -30,6 +31,10 @@ type RowState = {
   grade: number;
   status: AttendanceStatus;
   note: string;
+  originalStatus: AttendanceStatus;
+  originalNote: string;
+  guardian_name?: string | null;
+  gender?: string | null;
 };
 
 const STATUS_OPTIONS: AttendanceStatus[] = ["present", "absent", "late", "excused"];
@@ -39,6 +44,7 @@ export default function AttendancePage() {
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
   const [students, setStudents] = useState<Student[]>([]);
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
@@ -47,10 +53,15 @@ export default function AttendancePage() {
   const [selectedGrade, setSelectedGrade] = useState<string>("all");
   const [selectedDate, setSelectedDate] = useState<string>(todayLocalISO());
   const [search, setSearch] = useState("");
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
+  const [notesOnly, setNotesOnly] = useState(false);
+  const [sortBy, setSortBy] = useState<"name" | "grade" | "status">("name");
 
   async function loadAll(showRefresh = false) {
     try {
       setError(null);
+      setSuccess(null);
+
       if (showRefresh) setRefreshing(true);
       else setLoading(true);
 
@@ -77,12 +88,19 @@ export default function AttendancePage() {
 
       const mapped: RowState[] = studentList.map((student) => {
         const existing = attendanceList.find((r) => r.student_id === student.id);
+        const existingStatus = existing?.status || "present";
+        const existingNote = existing?.note || "";
+
         return {
           student_id: student.id,
           name: student.name,
           grade: student.grade,
-          status: existing?.status || "present",
-          note: existing?.note || "",
+          status: existingStatus,
+          note: existingNote,
+          originalStatus: existingStatus,
+          originalNote: existingNote,
+          guardian_name: student.guardian_name || "",
+          gender: student.gender || "",
         };
       });
 
@@ -102,20 +120,6 @@ export default function AttendancePage() {
     void loadAll();
   }, [selectedDate, selectedGrade]);
 
-  const filteredRows = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    if (!needle) return rows;
-
-    return rows.filter((row) => {
-      return (
-        row.name.toLowerCase().includes(needle) ||
-        String(row.grade).includes(needle) ||
-        row.status.toLowerCase().includes(needle) ||
-        row.note.toLowerCase().includes(needle)
-      );
-    });
-  }, [rows, search]);
-
   const grades = useMemo(() => {
     const unique = Array.from(new Set(students.map((s) => s.grade))).sort((a, b) => a - b);
     return unique;
@@ -126,15 +130,64 @@ export default function AttendancePage() {
     const absent = rows.filter((r) => r.status === "absent").length;
     const late = rows.filter((r) => r.status === "late").length;
     const excused = rows.filter((r) => r.status === "excused").length;
+    const withNotes = rows.filter((r) => r.note.trim()).length;
+    const changed = rows.filter((r) => hasRowChanged(r)).length;
+
+    const total = rows.length;
+    const presentPct = total ? Math.round((present / total) * 100) : 0;
 
     return {
-      total: rows.length,
+      total,
       present,
       absent,
       late,
       excused,
+      withNotes,
+      changed,
+      presentPct,
     };
   }, [rows]);
+
+  const filteredRows = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+
+    let list = rows.filter((row) => {
+      const matchesSearch =
+        !needle ||
+        row.name.toLowerCase().includes(needle) ||
+        String(row.grade).includes(needle) ||
+        row.status.toLowerCase().includes(needle) ||
+        row.note.toLowerCase().includes(needle) ||
+        String(row.guardian_name || "").toLowerCase().includes(needle) ||
+        String(row.gender || "").toLowerCase().includes(needle);
+
+      const matchesQuickFilter = quickFilter === "all" || row.status === quickFilter;
+      const matchesNotes = !notesOnly || Boolean(row.note.trim());
+
+      return matchesSearch && matchesQuickFilter && matchesNotes;
+    });
+
+    list = [...list].sort((a, b) => {
+      if (sortBy === "grade") return a.grade - b.grade || a.name.localeCompare(b.name);
+      if (sortBy === "status") return a.status.localeCompare(b.status) || a.name.localeCompare(b.name);
+      return a.name.localeCompare(b.name);
+    });
+
+    return list;
+  }, [rows, search, quickFilter, notesOnly, sortBy]);
+
+  const recentAttendanceSummary = useMemo(() => {
+    return [
+      { label: "Present rate", value: `${stats.presentPct}%` },
+      { label: "Notes added", value: String(stats.withNotes) },
+      { label: "Unsaved changes", value: String(stats.changed) },
+      { label: "Records loaded", value: String(records.length) },
+    ];
+  }, [stats, records.length]);
+
+  const hasActiveFilters = Boolean(
+    search.trim() || quickFilter !== "all" || notesOnly || sortBy !== "name"
+  );
 
   function updateRow(studentId: number, patch: Partial<RowState>) {
     setRows((prev) =>
@@ -153,10 +206,30 @@ export default function AttendancePage() {
     setRows((prev) => prev.map((row) => ({ ...row, status })));
   }
 
+  function clearSecondaryFilters() {
+    setSearch("");
+    setQuickFilter("all");
+    setNotesOnly(false);
+    setSortBy("name");
+  }
+
+  function resetAllChanges() {
+    setRows((prev) =>
+      prev.map((row) => ({
+        ...row,
+        status: row.originalStatus,
+        note: row.originalNote,
+      }))
+    );
+    setSuccess("Unsaved changes reset.");
+    setError(null);
+  }
+
   async function saveAttendance() {
     try {
       setSaving(true);
       setError(null);
+      setSuccess(null);
 
       const payload = rows.map((row) => ({
         student_id: row.student_id,
@@ -168,6 +241,7 @@ export default function AttendancePage() {
       await api.put("/attendance", payload);
 
       await loadAll(true);
+      setSuccess("Attendance saved successfully.");
     } catch (e: unknown) {
       setError(extractErr(e, "Failed to save attendance"));
     } finally {
@@ -187,9 +261,15 @@ export default function AttendancePage() {
               <div style={eyebrow}>School Platform</div>
               <h1 style={heroTitle}>Attendance</h1>
               <p style={subtitle}>
-                Track daily attendance, review student presence, and save updates in one
-                clean workflow.
+                Track daily attendance, review student presence, flag absences and lateness,
+                and save updates in one polished workflow.
               </p>
+
+              <div style={heroMiniStats}>
+                <HeroMiniBadge label="Students" value={String(stats.total)} />
+                <HeroMiniBadge label="Present rate" value={`${stats.presentPct}%`} />
+                <HeroMiniBadge label="Unsaved" value={String(stats.changed)} />
+              </div>
             </div>
 
             <div style={heroActions}>
@@ -200,6 +280,15 @@ export default function AttendancePage() {
               >
                 {refreshing ? "Refreshing..." : "Refresh"}
               </button>
+
+              <button
+                onClick={resetAllChanges}
+                style={btnSecondary}
+                disabled={loading || saving || stats.changed === 0}
+              >
+                Reset Changes
+              </button>
+
               <button onClick={saveAttendance} style={btnPrimary} disabled={loading || saving}>
                 {saving ? "Saving..." : "Save Attendance"}
               </button>
@@ -213,6 +302,43 @@ export default function AttendancePage() {
           <StatCard label="Absent" value={stats.absent} accent="red" />
           <StatCard label="Late" value={stats.late} accent="amber" />
           <StatCard label="Excused" value={stats.excused} accent="slate" />
+          <StatCard label="Notes" value={stats.withNotes} accent="purple" />
+        </section>
+
+        <section style={insightGrid}>
+          <div style={insightCard}>
+            <div style={insightTitle}>Today’s Snapshot</div>
+            <div style={insightSub}>Quick visibility into the register before you save.</div>
+
+            <div style={snapshotGrid}>
+              {recentAttendanceSummary.map((item) => (
+                <div key={item.label} style={snapshotCard}>
+                  <div style={snapshotLabel}>{item.label}</div>
+                  <div style={snapshotValue}>{item.value}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={insightCard}>
+            <div style={insightTitle}>Bulk Actions</div>
+            <div style={insightSub}>Speed through the register with one-click updates.</div>
+
+            <div style={bulkGrid}>
+              <button style={bulkBtn} onClick={() => markAll("present")} disabled={saving}>
+                ✅ Mark all present
+              </button>
+              <button style={bulkBtn} onClick={() => markAll("absent")} disabled={saving}>
+                ❌ Mark all absent
+              </button>
+              <button style={bulkBtn} onClick={() => markAll("late")} disabled={saving}>
+                ⏰ Mark all late
+              </button>
+              <button style={bulkBtn} onClick={() => markAll("excused")} disabled={saving}>
+                📝 Mark all excused
+              </button>
+            </div>
+          </div>
         </section>
 
         <section style={toolbar}>
@@ -249,24 +375,78 @@ export default function AttendancePage() {
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search student, grade, status..."
+                placeholder="Search student, status, guardian..."
                 style={fieldInput}
               />
+            </div>
+
+            <div style={fieldBlock}>
+              <label style={fieldLabel}>Sort by</label>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as "name" | "grade" | "status")}
+                style={fieldInput}
+              >
+                <option value="name">Name</option>
+                <option value="grade">Grade</option>
+                <option value="status">Status</option>
+              </select>
             </div>
           </div>
 
           <div style={toolbarRight}>
-            <button style={smallActionBtn} onClick={() => markAll("present")} disabled={saving}>
-              Mark all present
-            </button>
-            <button style={smallActionBtn} onClick={() => markAll("absent")} disabled={saving}>
-              Mark all absent
-            </button>
-            <button style={smallActionBtn} onClick={() => markAll("late")} disabled={saving}>
-              Mark all late
+            <FilterChip
+              active={quickFilter === "all"}
+              onClick={() => setQuickFilter("all")}
+              label="All"
+            />
+            <FilterChip
+              active={quickFilter === "present"}
+              onClick={() => setQuickFilter("present")}
+              label="Present"
+            />
+            <FilterChip
+              active={quickFilter === "absent"}
+              onClick={() => setQuickFilter("absent")}
+              label="Absent"
+            />
+            <FilterChip
+              active={quickFilter === "late"}
+              onClick={() => setQuickFilter("late")}
+              label="Late"
+            />
+            <FilterChip
+              active={quickFilter === "excused"}
+              onClick={() => setQuickFilter("excused")}
+              label="Excused"
+            />
+            <FilterChip
+              active={notesOnly}
+              onClick={() => setNotesOnly((v) => !v)}
+              label={notesOnly ? "Notes only ✓" : "Notes only"}
+            />
+            <button style={smallActionBtn} onClick={clearSecondaryFilters} disabled={saving}>
+              Clear
             </button>
           </div>
         </section>
+
+        {hasActiveFilters && (
+          <div style={chipBar}>
+            {search.trim() ? (
+              <ActiveChip label={`Search: ${search.trim()}`} onRemove={() => setSearch("")} />
+            ) : null}
+            {quickFilter !== "all" ? (
+              <ActiveChip label={`Status: ${capitalize(quickFilter)}`} onRemove={() => setQuickFilter("all")} />
+            ) : null}
+            {notesOnly ? (
+              <ActiveChip label="Notes only" onRemove={() => setNotesOnly(false)} />
+            ) : null}
+            {sortBy !== "name" ? (
+              <ActiveChip label={`Sort: ${capitalize(sortBy)}`} onRemove={() => setSortBy("name")} />
+            ) : null}
+          </div>
+        )}
 
         {error && (
           <div style={alertBox}>
@@ -275,14 +455,27 @@ export default function AttendancePage() {
           </div>
         )}
 
+        {success && (
+          <div style={successBox}>
+            <strong style={{ marginRight: 8 }}>Success:</strong>
+            {success}
+          </div>
+        )}
+
         <section style={panel}>
           <div style={panelHeader}>
-            <div>
-              <div style={panelTitle}>Daily Attendance Register</div>
-              <div style={panelSubtitle}>
-                {loading
-                  ? "Loading attendance..."
-                  : `${filteredRows.length} student(s) shown for ${selectedDate}`}
+            <div style={panelHeaderTop}>
+              <div>
+                <div style={panelTitle}>Daily Attendance Register</div>
+                <div style={panelSubtitle}>
+                  {loading
+                    ? "Loading attendance..."
+                    : `${filteredRows.length} student(s) shown for ${selectedDate}`}
+                </div>
+              </div>
+
+              <div style={resultPill}>
+                {stats.changed} unsaved
               </div>
             </div>
           </div>
@@ -294,9 +487,10 @@ export default function AttendancePage() {
             </div>
           ) : filteredRows.length === 0 ? (
             <div style={emptyState}>
+              <div style={emptyStateIcon}>🗂️</div>
               <div style={emptyStateTitle}>No students found</div>
               <div style={emptyStateText}>
-                Try another grade filter or add students first.
+                Try another grade filter, clear the search, or add students first.
               </div>
             </div>
           ) : (
@@ -312,83 +506,99 @@ export default function AttendancePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredRows.map((row) => (
-                    <tr key={row.student_id} style={tr}>
-                      <td style={td}>
-                        <div style={studentCell}>
-                          <div style={studentAvatar}>{initials(row.name)}</div>
-                          <div>
-                            <div style={studentName}>{row.name}</div>
-                            <div style={studentMeta}>ID: {row.student_id}</div>
+                  {filteredRows.map((row) => {
+                    const changed = hasRowChanged(row);
+                    return (
+                      <tr
+                        key={row.student_id}
+                        style={{
+                          ...tr,
+                          ...(changed ? changedRow : {}),
+                        }}
+                      >
+                        <td style={td}>
+                          <div style={studentCell}>
+                            <div style={studentAvatar}>{initials(row.name)}</div>
+                            <div>
+                              <div style={studentNameRow}>
+                                <div style={studentName}>{row.name}</div>
+                                {changed ? <span style={editedBadge}>Edited</span> : null}
+                              </div>
+                              <div style={studentMeta}>
+                                ID: {row.student_id}
+                                {row.guardian_name ? ` • Guardian: ${row.guardian_name}` : ""}
+                                {row.gender ? ` • ${capitalize(String(row.gender).toLowerCase())}` : ""}
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                      </td>
+                        </td>
 
-                      <td style={td}>
-                        <span style={gradeBadge}>Grade {row.grade}</span>
-                      </td>
+                        <td style={td}>
+                          <span style={gradeBadge}>Grade {row.grade}</span>
+                        </td>
 
-                      <td style={td}>
-                        <select
-                          value={row.status}
-                          onChange={(e) =>
-                            updateRow(row.student_id, {
-                              status: e.target.value as AttendanceStatus,
-                            })
-                          }
-                          style={{
-                            ...statusSelect,
-                            ...statusStyle(row.status),
-                          }}
-                        >
-                          {STATUS_OPTIONS.map((status) => (
-                            <option key={status} value={status}>
-                              {capitalize(status)}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
+                        <td style={td}>
+                          <select
+                            value={row.status}
+                            onChange={(e) =>
+                              updateRow(row.student_id, {
+                                status: e.target.value as AttendanceStatus,
+                              })
+                            }
+                            style={{
+                              ...statusSelect,
+                              ...statusStyle(row.status),
+                            }}
+                          >
+                            {STATUS_OPTIONS.map((status) => (
+                              <option key={status} value={status}>
+                                {capitalize(status)}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
 
-                      <td style={td}>
-                        <div style={quickActionWrap}>
-                          <button
-                            style={{ ...quickStatusBtn, ...quickStatusBtnActive("present", row.status) }}
-                            onClick={() => updateRow(row.student_id, { status: "present" })}
-                          >
-                            Present
-                          </button>
-                          <button
-                            style={{ ...quickStatusBtn, ...quickStatusBtnActive("absent", row.status) }}
-                            onClick={() => updateRow(row.student_id, { status: "absent" })}
-                          >
-                            Absent
-                          </button>
-                          <button
-                            style={{ ...quickStatusBtn, ...quickStatusBtnActive("late", row.status) }}
-                            onClick={() => updateRow(row.student_id, { status: "late" })}
-                          >
-                            Late
-                          </button>
-                          <button
-                            style={{ ...quickStatusBtn, ...quickStatusBtnActive("excused", row.status) }}
-                            onClick={() => updateRow(row.student_id, { status: "excused" })}
-                          >
-                            Excused
-                          </button>
-                        </div>
-                      </td>
+                        <td style={td}>
+                          <div style={quickActionWrap}>
+                            <button
+                              style={{ ...quickStatusBtn, ...quickStatusBtnActive("present", row.status) }}
+                              onClick={() => updateRow(row.student_id, { status: "present" })}
+                            >
+                              Present
+                            </button>
+                            <button
+                              style={{ ...quickStatusBtn, ...quickStatusBtnActive("absent", row.status) }}
+                              onClick={() => updateRow(row.student_id, { status: "absent" })}
+                            >
+                              Absent
+                            </button>
+                            <button
+                              style={{ ...quickStatusBtn, ...quickStatusBtnActive("late", row.status) }}
+                              onClick={() => updateRow(row.student_id, { status: "late" })}
+                            >
+                              Late
+                            </button>
+                            <button
+                              style={{ ...quickStatusBtn, ...quickStatusBtnActive("excused", row.status) }}
+                              onClick={() => updateRow(row.student_id, { status: "excused" })}
+                            >
+                              Excused
+                            </button>
+                          </div>
+                        </td>
 
-                      <td style={td}>
-                        <input
-                          type="text"
-                          value={row.note}
-                          onChange={(e) => updateRow(row.student_id, { note: e.target.value })}
-                          placeholder="Add note..."
-                          style={noteInput}
-                        />
-                      </td>
-                    </tr>
-                  ))}
+                        <td style={td}>
+                          <input
+                            type="text"
+                            value={row.note}
+                            onChange={(e) => updateRow(row.student_id, { note: e.target.value })}
+                            placeholder="Add note..."
+                            style={noteInput}
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -406,7 +616,7 @@ function StatCard({
 }: {
   label: string;
   value: number;
-  accent: "blue" | "green" | "red" | "amber" | "slate";
+  accent: "blue" | "green" | "red" | "amber" | "slate" | "purple";
 }) {
   const accentMap: Record<string, string> = {
     blue: "rgba(59,130,246,0.22)",
@@ -414,12 +624,60 @@ function StatCard({
     red: "rgba(239,68,68,0.20)",
     amber: "rgba(245,158,11,0.22)",
     slate: "rgba(148,163,184,0.18)",
+    purple: "rgba(168,85,247,0.22)",
   };
 
   return (
     <div style={{ ...statCard, boxShadow: `inset 0 0 0 1px ${accentMap[accent]}` }}>
       <div style={statLabel}>{label}</div>
       <div style={statValue}>{value}</div>
+    </div>
+  );
+}
+
+function HeroMiniBadge({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={heroMiniBadge}>
+      <div style={heroMiniLabel}>{label}</div>
+      <div style={heroMiniValue}>{value}</div>
+    </div>
+  );
+}
+
+function FilterChip({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: "10px 12px",
+        borderRadius: 999,
+        border: "1px solid rgba(255,255,255,0.14)",
+        background: active ? "#ffffff" : "rgba(255,255,255,0.06)",
+        color: active ? "#0b1220" : "#f8fafc",
+        fontWeight: 900,
+        cursor: "pointer",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function ActiveChip({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return (
+    <div style={activeChip}>
+      <span>{label}</span>
+      <button onClick={onRemove} style={activeChipBtn}>
+        ✕
+      </button>
     </div>
   );
 }
@@ -441,6 +699,10 @@ function initials(name: string) {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase())
     .join("");
+}
+
+function hasRowChanged(row: RowState) {
+  return row.status !== row.originalStatus || row.note.trim() !== row.originalNote.trim();
 }
 
 function extractErr(e: unknown, fallback: string) {
@@ -590,11 +852,113 @@ const heroActions: CSSProperties = {
   flexWrap: "wrap",
 };
 
+const heroMiniStats: CSSProperties = {
+  display: "flex",
+  gap: 10,
+  flexWrap: "wrap",
+  marginTop: 16,
+};
+
+const heroMiniBadge: CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.05)",
+};
+
+const heroMiniLabel: CSSProperties = {
+  fontSize: 11,
+  color: "#94a3b8",
+  fontWeight: 800,
+  textTransform: "uppercase",
+  letterSpacing: 0.6,
+};
+
+const heroMiniValue: CSSProperties = {
+  fontSize: 14,
+  color: "#fff",
+  fontWeight: 900,
+  marginTop: 4,
+};
+
 const statsGrid: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
   gap: 12,
   marginBottom: 18,
+};
+
+const insightGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 16,
+  marginBottom: 18,
+};
+
+const insightCard: CSSProperties = {
+  borderRadius: 18,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(15,23,42,0.62)",
+  backdropFilter: "blur(6px)",
+  boxShadow: "0 10px 30px rgba(0,0,0,0.12)",
+  padding: 16,
+};
+
+const insightTitle: CSSProperties = {
+  fontSize: 17,
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const insightSub: CSSProperties = {
+  marginTop: 4,
+  fontSize: 13,
+  color: "#94a3b8",
+};
+
+const snapshotGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 12,
+  marginTop: 14,
+};
+
+const snapshotCard: CSSProperties = {
+  padding: 14,
+  borderRadius: 14,
+  background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.08)",
+};
+
+const snapshotLabel: CSSProperties = {
+  fontSize: 12,
+  color: "#94a3b8",
+  fontWeight: 800,
+};
+
+const snapshotValue: CSSProperties = {
+  marginTop: 8,
+  fontSize: 22,
+  color: "#fff",
+  fontWeight: 900,
+};
+
+const bulkGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 10,
+  marginTop: 14,
+};
+
+const bulkBtn: CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.05)",
+  color: "#fff",
+  fontWeight: 800,
+  cursor: "pointer",
+  textAlign: "left",
 };
 
 const statCard: CSSProperties = {
@@ -627,7 +991,7 @@ const toolbar: CSSProperties = {
   alignItems: "flex-end",
   gap: 16,
   flexWrap: "wrap",
-  marginBottom: 16,
+  marginBottom: 8,
 };
 
 const toolbarLeft: CSSProperties = {
@@ -694,6 +1058,37 @@ const btnSecondary: CSSProperties = {
   cursor: "pointer",
 };
 
+const chipBar: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  flexWrap: "wrap",
+  marginBottom: 16,
+};
+
+const activeChip: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "8px 10px",
+  borderRadius: 999,
+  border: "1px solid rgba(96,165,250,0.22)",
+  background: "rgba(96,165,250,0.12)",
+  color: "#dbeafe",
+  fontSize: 12,
+  fontWeight: 800,
+};
+
+const activeChipBtn: CSSProperties = {
+  width: 22,
+  height: 22,
+  borderRadius: 999,
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "rgba(255,255,255,0.08)",
+  color: "#fff",
+  cursor: "pointer",
+  fontWeight: 900,
+};
+
 const alertBox: CSSProperties = {
   marginBottom: 16,
   padding: "12px 14px",
@@ -701,6 +1096,15 @@ const alertBox: CSSProperties = {
   border: "1px solid rgba(239,68,68,0.35)",
   background: "rgba(239,68,68,0.12)",
   color: "#fee2e2",
+};
+
+const successBox: CSSProperties = {
+  marginBottom: 16,
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid rgba(34,197,94,0.28)",
+  background: "rgba(34,197,94,0.12)",
+  color: "#dcfce7",
 };
 
 const panel: CSSProperties = {
@@ -718,6 +1122,14 @@ const panelHeader: CSSProperties = {
   borderBottom: "1px solid rgba(255,255,255,0.08)",
 };
 
+const panelHeaderTop: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "center",
+  flexWrap: "wrap",
+};
+
 const panelTitle: CSSProperties = {
   fontWeight: 900,
   fontSize: 18,
@@ -729,10 +1141,24 @@ const panelSubtitle: CSSProperties = {
   fontSize: 13,
 };
 
+const resultPill: CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 999,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.05)",
+  color: "#e2e8f0",
+  fontSize: 12,
+  fontWeight: 800,
+};
+
 const emptyState: CSSProperties = {
   padding: 28,
   textAlign: "center",
   color: "#cbd5e1",
+};
+
+const emptyStateIcon: CSSProperties = {
+  fontSize: 34,
 };
 
 const emptyStateTitle: CSSProperties = {
@@ -755,7 +1181,7 @@ const tableWrap: CSSProperties = {
 const table: CSSProperties = {
   width: "100%",
   borderCollapse: "collapse",
-  minWidth: 1100,
+  minWidth: 1180,
 };
 
 const th: CSSProperties = {
@@ -772,6 +1198,10 @@ const th: CSSProperties = {
 
 const tr: CSSProperties = {
   borderBottom: "1px solid rgba(255,255,255,0.06)",
+};
+
+const changedRow: CSSProperties = {
+  background: "rgba(96,165,250,0.05)",
 };
 
 const td: CSSProperties = {
@@ -795,6 +1225,26 @@ const studentAvatar: CSSProperties = {
   color: "#fff",
   fontWeight: 900,
   fontSize: 13,
+};
+
+const studentNameRow: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  flexWrap: "wrap",
+};
+
+const editedBadge: CSSProperties = {
+  display: "inline-block",
+  padding: "4px 8px",
+  borderRadius: 999,
+  background: "rgba(168,85,247,0.16)",
+  color: "#e9d5ff",
+  border: "1px solid rgba(168,85,247,0.24)",
+  fontSize: 10,
+  fontWeight: 900,
+  letterSpacing: 0.4,
+  textTransform: "uppercase",
 };
 
 const studentName: CSSProperties = {
@@ -845,7 +1295,7 @@ const quickStatusBtn: CSSProperties = {
 
 const noteInput: CSSProperties = {
   width: "100%",
-  minWidth: 180,
+  minWidth: 220,
   padding: "10px 12px",
   borderRadius: 12,
   border: "1px solid rgba(255,255,255,0.14)",
