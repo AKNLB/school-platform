@@ -184,7 +184,9 @@ export default function ReportCardsPage() {
     if (!q) return students.slice(0, 20);
 
     return students
-      .filter((s) => `${s.name} ${s.id} ${s.grade} ${s.guardian_name || ""}`.toLowerCase().includes(q))
+      .filter((s) =>
+        `${s.name} ${s.id} ${s.grade} ${s.guardian_name || ""}`.toLowerCase().includes(q)
+      )
       .slice(0, 20);
   }, [students, studentSearch]);
 
@@ -204,13 +206,82 @@ export default function ReportCardsPage() {
   }, [scores, selectedStudentId, selectedTerm, selectedGrade]);
 
   const subjectCount = report?.subjects?.length ?? 0;
+
   const topSubject = useMemo(() => {
     if (!report?.subjects?.length) return null;
     return [...report.subjects].sort((a, b) => b.total - a.total)[0];
   }, [report]);
 
+  const weakestSubject = useMemo(() => {
+    if (!report?.subjects?.length) return null;
+    return [...report.subjects].sort((a, b) => a.total - b.total)[0];
+  }, [report]);
+
+  const performanceBand = useMemo(() => {
+    const avg = Number(report?.average || 0);
+    if (avg >= 90) return "Excellent";
+    if (avg >= 75) return "Very Strong";
+    if (avg >= 60) return "Good";
+    if (avg >= 50) return "Developing";
+    return "Needs Support";
+  }, [report]);
+
+  const reportInsights = useMemo(() => {
+    if (!report?.subjects?.length) {
+      return {
+        passCount: 0,
+        failCount: 0,
+        highest: 0,
+        lowest: 0,
+      };
+    }
+
+    const totals = report.subjects.map((s) => s.total);
+    return {
+      passCount: totals.filter((x) => x >= 50).length,
+      failCount: totals.filter((x) => x < 50).length,
+      highest: Math.max(...totals),
+      lowest: Math.min(...totals),
+    };
+  }, [report]);
+
+  const gradeDistribution = useMemo(() => {
+    if (!report?.subjects?.length) return [];
+    const buckets = [
+      { label: "A", count: 0 },
+      { label: "B", count: 0 },
+      { label: "C", count: 0 },
+      { label: "D", count: 0 },
+      { label: "E", count: 0 },
+      { label: "F", count: 0 },
+    ];
+
+    report.subjects.forEach((subject) => {
+      const letter = gradeLetter(subject.total);
+      const bucket = buckets.find((b) => b.label === letter);
+      if (bucket) bucket.count += 1;
+    });
+
+    return buckets;
+  }, [report]);
+
+  const avgCA = useMemo(() => {
+    if (!report?.subjects?.length) return 0;
+    const total = report.subjects.reduce((sum, row) => sum + row.cont_ass, 0);
+    return round1(total / report.subjects.length);
+  }, [report]);
+
+  const avgExam = useMemo(() => {
+    if (!report?.subjects?.length) return 0;
+    const total = report.subjects.reduce((sum, row) => sum + row.exam, 0);
+    return round1(total / report.subjects.length);
+  }, [report]);
+
   return (
     <div style={pageShell}>
+      <div style={bgGlowOne} />
+      <div style={bgGlowTwo} />
+
       <div style={page}>
         <section style={hero}>
           <div>
@@ -218,8 +289,14 @@ export default function ReportCardsPage() {
             <h1 style={heroTitle}>Report Cards</h1>
             <p style={subtitle}>
               Generate polished student report cards, preview score breakdowns, add remarks,
-              and export clean PDF copies for sharing and printing.
+              and export premium PDF copies for parents, teachers, and school records.
             </p>
+
+            <div style={heroMiniRow}>
+              <HeroMiniBadge label="Students" value={String(students.length)} />
+              <HeroMiniBadge label="Scores" value={String(scores.length)} />
+              <HeroMiniBadge label="Current Term" value={selectedTerm} />
+            </div>
           </div>
 
           <div style={heroActions}>
@@ -227,7 +304,7 @@ export default function ReportCardsPage() {
               Refresh
             </button>
             <button style={btnPrimary} onClick={() => void generateReport()} disabled={busy}>
-              Generate Report
+              {busy ? "Generating..." : "Generate Report"}
             </button>
           </div>
         </section>
@@ -284,6 +361,41 @@ export default function ReportCardsPage() {
             subtitle="Current student average"
             accent="red"
           />
+        </section>
+
+        <section style={premiumInsightsGrid}>
+          <div style={insightPanel}>
+            <div style={insightTitle}>Report Insights</div>
+            <div style={insightSub}>Premium summary of the currently loaded report card.</div>
+
+            {!report ? (
+              <div style={emptyMini}>Generate a report to unlock insights.</div>
+            ) : (
+              <div style={insightMetricGrid}>
+                <InsightMetric label="Average CA" value={String(avgCA)} />
+                <InsightMetric label="Average Exam" value={String(avgExam)} />
+                <InsightMetric label="Pass Subjects" value={String(reportInsights.passCount)} />
+                <InsightMetric label="Needs Support" value={String(reportInsights.failCount)} />
+              </div>
+            )}
+          </div>
+
+          <div style={insightPanel}>
+            <div style={insightTitle}>Performance Band</div>
+            <div style={insightSub}>Overall academic standing based on the current report.</div>
+
+            {!report ? (
+              <div style={emptyMini}>No report generated yet.</div>
+            ) : (
+              <div style={bandCard}>
+                <div style={bandLabel}>Overall Performance</div>
+                <div style={bandValue}>{performanceBand}</div>
+                <div style={bandSub}>
+                  Highest: {reportInsights.highest} • Lowest: {reportInsights.lowest}
+                </div>
+              </div>
+            )}
+          </div>
         </section>
 
         <section style={twoCol}>
@@ -374,7 +486,9 @@ export default function ReportCardsPage() {
           <Panel
             title="Student Snapshot"
             subtitle="Quick view of the selected student and report context."
-            right={selectedStudent ? <span style={pill}>Student selected</span> : <span style={pill}>No selection</span>}
+            right={
+              selectedStudent ? <span style={pill}>Student selected</span> : <span style={pill}>No selection</span>
+            }
           >
             {!selectedStudent ? (
               <EmptyState text="Choose a student to see the snapshot." />
@@ -401,10 +515,19 @@ export default function ReportCardsPage() {
                 </div>
 
                 {topSubject ? (
-                  <div style={highlightCard}>
-                    <div style={highlightLabel}>Top Subject</div>
-                    <div style={highlightValue}>
-                      {topSubject.subject} • {topSubject.total}
+                  <div style={highlightGrid}>
+                    <div style={highlightCard}>
+                      <div style={highlightLabel}>Top Subject</div>
+                      <div style={highlightValue}>
+                        {topSubject.subject} • {topSubject.total}
+                      </div>
+                    </div>
+
+                    <div style={highlightCardSecondary}>
+                      <div style={highlightLabelSecondary}>Weakest Subject</div>
+                      <div style={highlightValue}>
+                        {weakestSubject?.subject || "--"} • {weakestSubject?.total || "--"}
+                      </div>
                     </div>
                   </div>
                 ) : (
@@ -434,6 +557,7 @@ export default function ReportCardsPage() {
                       <th style={{ ...th, textAlign: "right" }}>CA</th>
                       <th style={{ ...th, textAlign: "right" }}>Exam</th>
                       <th style={{ ...th, textAlign: "right" }}>Total</th>
+                      <th style={{ ...th, textAlign: "right" }}>Grade</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -443,6 +567,9 @@ export default function ReportCardsPage() {
                         <td style={{ ...td, textAlign: "right" }}>{row.cont_ass}</td>
                         <td style={{ ...td, textAlign: "right" }}>{row.exam}</td>
                         <td style={{ ...tdStrong, textAlign: "right" }}>{row.total}</td>
+                        <td style={{ ...td, textAlign: "right" }}>
+                          <span style={gradeBadge(row.total)}>{gradeLetter(row.total)}</span>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -460,6 +587,10 @@ export default function ReportCardsPage() {
                   <div style={summaryPill}>
                     <span style={summaryPillLabel}>Average</span>
                     <span style={summaryPillValue}>{report.average}</span>
+                  </div>
+                  <div style={summaryPill}>
+                    <span style={summaryPillLabel}>Band</span>
+                    <span style={summaryPillValue}>{performanceBand}</span>
                   </div>
                 </div>
               </div>
@@ -507,6 +638,55 @@ export default function ReportCardsPage() {
               </div>
             )}
           </Panel>
+        </section>
+
+        <section style={premiumInsightsGrid}>
+          <div style={insightPanel}>
+            <div style={insightTitle}>Subject Grade Distribution</div>
+            <div style={insightSub}>A quick visual breakdown of performance by letter grade.</div>
+
+            {!report ? (
+              <div style={emptyMini}>Generate a report to view grade distribution.</div>
+            ) : (
+              <div style={distributionWrap}>
+                {gradeDistribution.map((item) => (
+                  <div key={item.label} style={distributionRow}>
+                    <div style={distributionLetter}>{item.label}</div>
+                    <div style={distributionTrack}>
+                      <div
+                        style={{
+                          ...distributionFill,
+                          width: `${subjectCount ? (item.count / subjectCount) * 100 : 0}%`,
+                        }}
+                      />
+                    </div>
+                    <div style={distributionCount}>{item.count}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={insightPanel}>
+            <div style={insightTitle}>Remarks Preview</div>
+            <div style={insightSub}>See how the final report narrative will feel.</div>
+
+            <div style={remarksPreviewCard}>
+              <div style={remarksBlock}>
+                <div style={remarksLabel}>Teacher Remark</div>
+                <div style={remarksText}>
+                  {teacherRemark.trim() || "No teacher remark added yet."}
+                </div>
+              </div>
+
+              <div style={remarksBlock}>
+                <div style={remarksLabel}>Principal Remark</div>
+                <div style={remarksText}>
+                  {principalRemark.trim() || "No principal remark added yet."}
+                </div>
+              </div>
+            </div>
+          </div>
         </section>
       </div>
     </div>
@@ -583,6 +763,24 @@ function StatCard({
   );
 }
 
+function HeroMiniBadge({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={heroMiniBadge}>
+      <div style={heroMiniLabel}>{label}</div>
+      <div style={heroMiniValue}>{value}</div>
+    </div>
+  );
+}
+
+function InsightMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={insightMetricCard}>
+      <div style={insightMetricLabel}>{label}</div>
+      <div style={insightMetricValue}>{value}</div>
+    </div>
+  );
+}
+
 function InfoTile({ label, value }: { label: string; value: string }) {
   return (
     <div style={infoTile}>
@@ -623,6 +821,63 @@ function EmptyState({ text }: { text: string }) {
   return <div style={emptyState}>{text}</div>;
 }
 
+function gradeLetter(total: number) {
+  if (total >= 90) return "A";
+  if (total >= 80) return "B";
+  if (total >= 70) return "C";
+  if (total >= 60) return "D";
+  if (total >= 50) return "E";
+  return "F";
+}
+
+function gradeBadge(total: number): CSSProperties {
+  const letter = gradeLetter(total);
+
+  const map: Record<string, CSSProperties> = {
+    A: {
+      background: "rgba(34,197,94,0.16)",
+      color: "#bbf7d0",
+      border: "1px solid rgba(34,197,94,0.30)",
+    },
+    B: {
+      background: "rgba(59,130,246,0.16)",
+      color: "#bfdbfe",
+      border: "1px solid rgba(59,130,246,0.30)",
+    },
+    C: {
+      background: "rgba(245,158,11,0.16)",
+      color: "#fde68a",
+      border: "1px solid rgba(245,158,11,0.30)",
+    },
+    D: {
+      background: "rgba(249,115,22,0.16)",
+      color: "#fdba74",
+      border: "1px solid rgba(249,115,22,0.30)",
+    },
+    E: {
+      background: "rgba(239,68,68,0.14)",
+      color: "#fecaca",
+      border: "1px solid rgba(239,68,68,0.28)",
+    },
+    F: {
+      background: "rgba(127,29,29,0.30)",
+      color: "#fecaca",
+      border: "1px solid rgba(248,113,113,0.30)",
+    },
+  };
+
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 36,
+    padding: "6px 10px",
+    borderRadius: 999,
+    fontWeight: 900,
+    ...(map[letter] || map.F),
+  };
+}
+
 function extractErr(
   e: unknown,
   fallback: string
@@ -640,8 +895,8 @@ function extractErr(
       ? (err.response.data as { message?: string; error?: string }).message ||
         (err.response.data as { message?: string; error?: string }).error
       : typeof err?.response?.data === "string"
-      ? err.response.data
-      : err?.message;
+        ? err.response.data
+        : err?.message;
 
   return msg || fallback;
 }
@@ -654,16 +909,46 @@ function formatDate(value: string) {
   }
 }
 
+function round1(value: number) {
+  return Math.round(value * 10) / 10;
+}
+
 const pageShell: CSSProperties = {
   minHeight: "100vh",
   background: "linear-gradient(180deg, #0f172a 0%, #111827 45%, #0b1220 100%)",
   color: "#f8fafc",
   padding: 24,
+  position: "relative",
+  overflow: "hidden",
+};
+
+const bgGlowOne: CSSProperties = {
+  position: "absolute",
+  top: -120,
+  right: -100,
+  width: 320,
+  height: 320,
+  borderRadius: "50%",
+  background: "radial-gradient(circle, rgba(59,130,246,0.22), transparent 70%)",
+  pointerEvents: "none",
+};
+
+const bgGlowTwo: CSSProperties = {
+  position: "absolute",
+  bottom: -160,
+  left: -120,
+  width: 360,
+  height: 360,
+  borderRadius: "50%",
+  background: "radial-gradient(circle, rgba(168,85,247,0.16), transparent 70%)",
+  pointerEvents: "none",
 };
 
 const page: CSSProperties = {
   maxWidth: 1400,
   margin: "0 auto",
+  position: "relative",
+  zIndex: 1,
 };
 
 const hero: CSSProperties = {
@@ -698,6 +983,35 @@ const subtitle: CSSProperties = {
   lineHeight: 1.5,
 };
 
+const heroMiniRow: CSSProperties = {
+  display: "flex",
+  gap: 10,
+  flexWrap: "wrap",
+  marginTop: 16,
+};
+
+const heroMiniBadge: CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.05)",
+};
+
+const heroMiniLabel: CSSProperties = {
+  fontSize: 11,
+  color: "#94a3b8",
+  fontWeight: 800,
+  textTransform: "uppercase",
+  letterSpacing: 0.6,
+};
+
+const heroMiniValue: CSSProperties = {
+  fontSize: 14,
+  color: "#fff",
+  fontWeight: 900,
+  marginTop: 4,
+};
+
 const heroActions: CSSProperties = {
   display: "flex",
   gap: 10,
@@ -709,6 +1023,95 @@ const statsGrid: CSSProperties = {
   gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
   gap: 14,
   marginBottom: 18,
+};
+
+const premiumInsightsGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 18,
+  marginBottom: 18,
+};
+
+const insightPanel: CSSProperties = {
+  borderRadius: 18,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(15,23,42,0.72)",
+  overflow: "hidden",
+  backdropFilter: "blur(8px)",
+  padding: 18,
+};
+
+const insightTitle: CSSProperties = {
+  fontWeight: 900,
+  fontSize: 18,
+  color: "#fff",
+};
+
+const insightSub: CSSProperties = {
+  marginTop: 6,
+  color: "#94a3b8",
+  fontSize: 13,
+};
+
+const insightMetricGrid: CSSProperties = {
+  marginTop: 14,
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(140px, 1fr))",
+  gap: 12,
+};
+
+const insightMetricCard: CSSProperties = {
+  borderRadius: 14,
+  padding: 14,
+  border: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(255,255,255,0.04)",
+};
+
+const insightMetricLabel: CSSProperties = {
+  fontSize: 12,
+  color: "#94a3b8",
+  fontWeight: 800,
+  textTransform: "uppercase",
+};
+
+const insightMetricValue: CSSProperties = {
+  marginTop: 8,
+  fontSize: 22,
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const bandCard: CSSProperties = {
+  marginTop: 14,
+  borderRadius: 16,
+  padding: 16,
+  background: "linear-gradient(135deg, rgba(59,130,246,0.18), rgba(168,85,247,0.16))",
+  border: "1px solid rgba(255,255,255,0.10)",
+};
+
+const bandLabel: CSSProperties = {
+  fontSize: 12,
+  fontWeight: 800,
+  color: "#cbd5e1",
+  textTransform: "uppercase",
+};
+
+const bandValue: CSSProperties = {
+  marginTop: 8,
+  fontSize: 28,
+  fontWeight: 950,
+  color: "#fff",
+};
+
+const bandSub: CSSProperties = {
+  marginTop: 8,
+  color: "#cbd5e1",
+  fontSize: 13,
+};
+
+const emptyMini: CSSProperties = {
+  padding: "12px 0",
+  color: "#cbd5e1",
 };
 
 const statCard: CSSProperties = {
@@ -907,12 +1310,25 @@ const infoTileValue: CSSProperties = {
   color: "#fff",
 };
 
-const highlightCard: CSSProperties = {
+const highlightGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 12,
   marginTop: 14,
+};
+
+const highlightCard: CSSProperties = {
   borderRadius: 14,
   padding: 14,
   background: "rgba(96,165,250,0.12)",
   border: "1px solid rgba(96,165,250,0.24)",
+};
+
+const highlightCardSecondary: CSSProperties = {
+  borderRadius: 14,
+  padding: 14,
+  background: "rgba(245,158,11,0.12)",
+  border: "1px solid rgba(245,158,11,0.24)",
 };
 
 const highlightCardMuted: CSSProperties = {
@@ -927,6 +1343,13 @@ const highlightCardMuted: CSSProperties = {
 const highlightLabel: CSSProperties = {
   fontSize: 12,
   color: "#93c5fd",
+  textTransform: "uppercase",
+  fontWeight: 800,
+};
+
+const highlightLabelSecondary: CSSProperties = {
+  fontSize: 12,
+  color: "#fcd34d",
   textTransform: "uppercase",
   fontWeight: 800,
 };
@@ -1039,4 +1462,67 @@ const scoreBadges: CSSProperties = {
   display: "flex",
   gap: 10,
   flexWrap: "wrap",
+};
+
+const distributionWrap: CSSProperties = {
+  display: "grid",
+  gap: 10,
+  marginTop: 14,
+};
+
+const distributionRow: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "40px 1fr 40px",
+  gap: 10,
+  alignItems: "center",
+};
+
+const distributionLetter: CSSProperties = {
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const distributionTrack: CSSProperties = {
+  height: 12,
+  borderRadius: 999,
+  background: "rgba(255,255,255,0.08)",
+  overflow: "hidden",
+};
+
+const distributionFill: CSSProperties = {
+  height: "100%",
+  borderRadius: 999,
+  background: "linear-gradient(90deg, rgba(59,130,246,0.95), rgba(168,85,247,0.95))",
+};
+
+const distributionCount: CSSProperties = {
+  textAlign: "right",
+  color: "#cbd5e1",
+  fontWeight: 800,
+};
+
+const remarksPreviewCard: CSSProperties = {
+  display: "grid",
+  gap: 12,
+  marginTop: 14,
+};
+
+const remarksBlock: CSSProperties = {
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(255,255,255,0.04)",
+  padding: 14,
+};
+
+const remarksLabel: CSSProperties = {
+  fontSize: 12,
+  fontWeight: 800,
+  color: "#94a3b8",
+  textTransform: "uppercase",
+};
+
+const remarksText: CSSProperties = {
+  marginTop: 8,
+  color: "#fff",
+  lineHeight: 1.6,
 };
