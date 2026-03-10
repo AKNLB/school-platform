@@ -42,6 +42,8 @@ type ScoreForm = {
   date: string;
 };
 
+type ViewMode = "all" | "top" | "needs-work";
+
 const TERMS = ["Term 1", "Term 2", "Term 3"];
 
 const SUBJECTS = [
@@ -73,6 +75,7 @@ export default function ScoresPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
@@ -82,6 +85,8 @@ export default function ScoresPage() {
   const [termFilter, setTermFilter] = useState("");
   const [gradeFilter, setGradeFilter] = useState("");
   const [studentFilter, setStudentFilter] = useState("");
+  const [subjectFilter, setSubjectFilter] = useState("");
+  const [viewMode, setViewMode] = useState<ViewMode>("all");
 
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<"create" | "edit">("create");
@@ -92,6 +97,7 @@ export default function ScoresPage() {
   async function loadAll() {
     setLoading(true);
     setErr(null);
+    setSuccess(null);
 
     try {
       const [scoresRes, studentsRes, usersRes] = await Promise.allSettled([
@@ -117,7 +123,12 @@ export default function ScoresPage() {
 
       setScores(loadedScores);
       setStudents(loadedStudents);
-      setTeachers(loadedUsers.filter((u) => (u.role || "").toLowerCase() === "teacher" || (u.role || "").toLowerCase() === "admin"));
+      setTeachers(
+        loadedUsers.filter((u) => {
+          const role = (u.role || "").toLowerCase();
+          return role === "teacher" || role === "admin";
+        })
+      );
 
       if (scoresRes.status === "rejected" && studentsRes.status === "rejected") {
         throw new Error("Failed to load scores and students.");
@@ -149,10 +160,19 @@ export default function ScoresPage() {
   }, [teachers]);
 
   const gradeOptions = useMemo(() => {
-    const grades = Array.from(new Set(students.map((s) => Number(s.grade)).filter((g) => !Number.isNaN(g))));
+    const grades = Array.from(
+      new Set(students.map((s) => Number(s.grade)).filter((g) => !Number.isNaN(g)))
+    );
     grades.sort((a, b) => a - b);
     return grades;
   }, [students]);
+
+  const subjectOptions = useMemo(() => {
+    const merged = Array.from(
+      new Set([...SUBJECTS, ...scores.map((s) => s.subject).filter(Boolean)])
+    ).sort((a, b) => a.localeCompare(b));
+    return merged;
+  }, [scores]);
 
   const filteredScores = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -160,21 +180,45 @@ export default function ScoresPage() {
     return scores.filter((row) => {
       const student = studentMap.get(Number(row.student_id));
       const teacher = teacherMap.get(Number(row.teacher_id));
+      const total = totalScoreFor(row);
 
       const matchesQuery =
         !needle ||
         row.subject.toLowerCase().includes(needle) ||
         String(row.term || "").toLowerCase().includes(needle) ||
         String(student?.name || "").toLowerCase().includes(needle) ||
+        String(student?.guardian_name || "").toLowerCase().includes(needle) ||
         String(teacher?.username || teacher?.email || "").toLowerCase().includes(needle);
 
       const matchesTerm = !termFilter || row.term === termFilter;
       const matchesGrade = !gradeFilter || Number(row.grade) === Number(gradeFilter);
       const matchesStudent = !studentFilter || Number(row.student_id) === Number(studentFilter);
+      const matchesSubject = !subjectFilter || row.subject === subjectFilter;
+      const matchesView =
+        viewMode === "all" ||
+        (viewMode === "top" && total >= 70) ||
+        (viewMode === "needs-work" && total < 50);
 
-      return matchesQuery && matchesTerm && matchesGrade && matchesStudent;
+      return (
+        matchesQuery &&
+        matchesTerm &&
+        matchesGrade &&
+        matchesStudent &&
+        matchesSubject &&
+        matchesView
+      );
     });
-  }, [scores, query, termFilter, gradeFilter, studentFilter, studentMap, teacherMap]);
+  }, [
+    scores,
+    query,
+    termFilter,
+    gradeFilter,
+    studentFilter,
+    subjectFilter,
+    viewMode,
+    studentMap,
+    teacherMap,
+  ]);
 
   const stats = useMemo(() => {
     const totalRows = filteredScores.length;
@@ -185,14 +229,90 @@ export default function ScoresPage() {
     const avg = totalRows ? round1(totalScore / totalRows) : 0;
     const pass = filteredScores.filter((row) => totalScoreFor(row) >= 50).length;
     const fail = totalRows - pass;
+    const excellent = filteredScores.filter((row) => totalScoreFor(row) >= 90).length;
+    const top = filteredScores.filter((row) => totalScoreFor(row) >= 70).length;
 
     return {
       totalRows,
       avg,
       pass,
       fail,
+      excellent,
+      top,
     };
   }, [filteredScores]);
+
+  const topSubjects = useMemo(() => {
+    const grouped = new Map<string, { total: number; count: number }>();
+
+    for (const row of filteredScores) {
+      const current = grouped.get(row.subject) || { total: 0, count: 0 };
+      current.total += totalScoreFor(row);
+      current.count += 1;
+      grouped.set(row.subject, current);
+    }
+
+    return Array.from(grouped.entries())
+      .map(([subject, data]) => ({
+        subject,
+        average: data.count ? round1(data.total / data.count) : 0,
+        count: data.count,
+      }))
+      .sort((a, b) => b.average - a.average)
+      .slice(0, 5);
+  }, [filteredScores]);
+
+  const topStudents = useMemo(() => {
+    const grouped = new Map<number, { total: number; count: number }>();
+
+    for (const row of filteredScores) {
+      const current = grouped.get(row.student_id) || { total: 0, count: 0 };
+      current.total += totalScoreFor(row);
+      current.count += 1;
+      grouped.set(row.student_id, current);
+    }
+
+    return Array.from(grouped.entries())
+      .map(([studentId, data]) => ({
+        studentId,
+        name: studentMap.get(studentId)?.name || `Student #${studentId}`,
+        average: data.count ? round1(data.total / data.count) : 0,
+        count: data.count,
+      }))
+      .sort((a, b) => b.average - a.average)
+      .slice(0, 5);
+  }, [filteredScores, studentMap]);
+
+  const gradeDistribution = useMemo(() => {
+    const buckets = {
+      A: 0,
+      B: 0,
+      C: 0,
+      D: 0,
+      E: 0,
+      F: 0,
+    };
+
+    for (const row of filteredScores) {
+      const letter = gradeLetter(totalScoreFor(row));
+      buckets[letter as keyof typeof buckets] += 1;
+    }
+
+    return Object.entries(buckets).map(([letter, count]) => ({ letter, count }));
+  }, [filteredScores]);
+
+  const quickSummary = useMemo(() => {
+    const caTotal = filteredScores.reduce((sum, row) => sum + Number(row.cont_ass_score || 0), 0);
+    const examTotal = filteredScores.reduce((sum, row) => sum + Number(row.exam_score || 0), 0);
+    return {
+      avgCa: filteredScores.length ? round1(caTotal / filteredScores.length) : 0,
+      avgExam: filteredScores.length ? round1(examTotal / filteredScores.length) : 0,
+    };
+  }, [filteredScores]);
+
+  const hasActiveFilters = Boolean(
+    query || termFilter || gradeFilter || studentFilter || subjectFilter || viewMode !== "all"
+  );
 
   function openCreate() {
     setMode("create");
@@ -245,6 +365,8 @@ export default function ScoresPage() {
 
   async function submit() {
     setFormError(null);
+    setErr(null);
+    setSuccess(null);
 
     const validation = validateForm(form);
     if (validation) {
@@ -275,6 +397,8 @@ export default function ScoresPage() {
         } else {
           await loadAll();
         }
+
+        setSuccess("Score saved successfully.");
       } else {
         if (!editing?.id) throw new Error("No score selected.");
 
@@ -286,6 +410,8 @@ export default function ScoresPage() {
         } else {
           await loadAll();
         }
+
+        setSuccess("Score updated successfully.");
       }
 
       setOpen(false);
@@ -302,12 +428,14 @@ export default function ScoresPage() {
 
     setBusy(true);
     setErr(null);
+    setSuccess(null);
 
     const prev = scores;
     setScores((curr) => curr.filter((x) => x.id !== row.id));
 
     try {
       await api.delete(`/scores/${row.id}`);
+      setSuccess("Score deleted successfully.");
     } catch (e: unknown) {
       setScores(prev);
       setErr(extractErr(e, "Failed to delete score."));
@@ -325,6 +453,15 @@ export default function ScoresPage() {
     }));
   }
 
+  function clearFilters() {
+    setQuery("");
+    setTermFilter("");
+    setGradeFilter("");
+    setStudentFilter("");
+    setSubjectFilter("");
+    setViewMode("all");
+  }
+
   const livePreview = useMemo(() => {
     const ca = clampInt(form.cont_ass_score, 0, 40);
     const ex = clampInt(form.exam_score, 0, 60);
@@ -340,15 +477,24 @@ export default function ScoresPage() {
 
   return (
     <div style={pageShell}>
+      <div style={backgroundGlowOne} />
+      <div style={backgroundGlowTwo} />
+
       <div style={page}>
         <section style={hero}>
           <div>
             <div style={eyebrow}>Academic Records</div>
             <h1 style={heroTitle}>Scores</h1>
             <p style={heroText}>
-              Record continuous assessment and exam scores, assign standard subjects,
-              and instantly see grade letters and effort labels.
+              Record continuous assessment and exam scores, track grade letters and effort labels,
+              and monitor subject performance from one premium academic workspace.
             </p>
+
+            <div style={heroMiniRow}>
+              <HeroMiniBadge label="Average" value={String(stats.avg)} />
+              <HeroMiniBadge label="Pass Rate" value={`${stats.totalRows ? Math.round((stats.pass / stats.totalRows) * 100) : 0}%`} />
+              <HeroMiniBadge label="Visible Rows" value={String(stats.totalRows)} />
+            </div>
           </div>
 
           <div style={heroActions}>
@@ -366,6 +512,87 @@ export default function ScoresPage() {
           <MetricCard label="Average" value={stats.avg} accent="green" />
           <MetricCard label="Pass" value={stats.pass} accent="purple" />
           <MetricCard label="Needs Work" value={stats.fail} accent="amber" />
+          <MetricCard label="Excellent" value={stats.excellent} accent="green" />
+        </section>
+
+        <section style={insightGrid}>
+          <div style={insightCard}>
+            <div style={insightTitle}>Performance Insights</div>
+            <div style={insightSub}>A quick academic overview based on current filters.</div>
+
+            <div style={insightMetricGrid}>
+              <InsightMetric label="Average CA" value={quickSummary.avgCa} />
+              <InsightMetric label="Average Exam" value={quickSummary.avgExam} />
+              <InsightMetric label="Top Performers" value={stats.top} />
+              <InsightMetric label="Students Needing Support" value={stats.fail} />
+            </div>
+          </div>
+
+          <div style={insightCard}>
+            <div style={insightTitle}>Grade Distribution</div>
+            <div style={insightSub}>How current results are spread across letter grades.</div>
+
+            <div style={distributionWrap}>
+              {gradeDistribution.map((item) => (
+                <div key={item.letter} style={distributionRow}>
+                  <div style={distributionLetter}>{item.letter}</div>
+                  <div style={distributionBarTrack}>
+                    <div
+                      style={{
+                        ...distributionBarFill,
+                        width: `${stats.totalRows ? (item.count / stats.totalRows) * 100 : 0}%`,
+                      }}
+                    />
+                  </div>
+                  <div style={distributionCount}>{item.count}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section style={twoColGrid}>
+          <div style={insightCard}>
+            <div style={insightTitle}>Top Subjects</div>
+            <div style={insightSub}>Highest average subjects in the current view.</div>
+
+            {topSubjects.length === 0 ? (
+              <div style={emptyMini}>No subject data available.</div>
+            ) : (
+              <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+                {topSubjects.map((item) => (
+                  <div key={item.subject} style={listRow}>
+                    <div>
+                      <div style={listTitle}>{item.subject}</div>
+                      <div style={listMeta}>{item.count} score entr{item.count === 1 ? "y" : "ies"}</div>
+                    </div>
+                    <div style={listValue}>{item.average}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={insightCard}>
+            <div style={insightTitle}>Top Students</div>
+            <div style={insightSub}>Best averages among currently visible records.</div>
+
+            {topStudents.length === 0 ? (
+              <div style={emptyMini}>No student data available.</div>
+            ) : (
+              <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+                {topStudents.map((item) => (
+                  <div key={item.studentId} style={listRow}>
+                    <div>
+                      <div style={listTitle}>{item.name}</div>
+                      <div style={listMeta}>{item.count} score entr{item.count === 1 ? "y" : "ies"}</div>
+                    </div>
+                    <div style={listValue}>{item.average}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </section>
 
         <section style={toolbar}>
@@ -406,28 +633,63 @@ export default function ScoresPage() {
                   </option>
                 ))}
             </select>
+
+            <select value={subjectFilter} onChange={(e) => setSubjectFilter(e.target.value)} style={filterInput}>
+              <option value="">All subjects</option>
+              {subjectOptions.map((subject) => (
+                <option key={subject} value={subject}>
+                  {subject}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div style={toolbarRight}>
-            <button
-              style={btnGhost}
-              onClick={() => {
-                setQuery("");
-                setTermFilter("");
-                setGradeFilter("");
-                setStudentFilter("");
-              }}
-              disabled={busy}
-            >
+            <FilterChip active={viewMode === "all"} onClick={() => setViewMode("all")} label="All" />
+            <FilterChip active={viewMode === "top"} onClick={() => setViewMode("top")} label="Top Performers" />
+            <FilterChip
+              active={viewMode === "needs-work"}
+              onClick={() => setViewMode("needs-work")}
+              label="Needs Work"
+            />
+            <button style={btnGhost} onClick={clearFilters} disabled={busy}>
               Clear Filters
             </button>
           </div>
         </section>
 
+        {hasActiveFilters && (
+          <div style={activeFilterRow}>
+            {query ? <ActiveFilter label={`Search: ${query}`} onRemove={() => setQuery("")} /> : null}
+            {termFilter ? <ActiveFilter label={`Term: ${termFilter}`} onRemove={() => setTermFilter("")} /> : null}
+            {gradeFilter ? <ActiveFilter label={`Grade: ${gradeFilter}`} onRemove={() => setGradeFilter("")} /> : null}
+            {studentFilter ? (
+              <ActiveFilter
+                label={`Student: ${studentMap.get(Number(studentFilter))?.name || studentFilter}`}
+                onRemove={() => setStudentFilter("")}
+              />
+            ) : null}
+            {subjectFilter ? <ActiveFilter label={`Subject: ${subjectFilter}`} onRemove={() => setSubjectFilter("")} /> : null}
+            {viewMode !== "all" ? (
+              <ActiveFilter
+                label={`View: ${viewMode === "top" ? "Top Performers" : "Needs Work"}`}
+                onRemove={() => setViewMode("all")}
+              />
+            ) : null}
+          </div>
+        )}
+
         {err && (
           <div style={alertBox}>
             <strong style={{ marginRight: 8 }}>Error:</strong>
             {err}
+          </div>
+        )}
+
+        {success && (
+          <div style={successBox}>
+            <strong style={{ marginRight: 8 }}>Success:</strong>
+            {success}
           </div>
         )}
 
@@ -730,6 +992,62 @@ function MetricCard({
   );
 }
 
+function HeroMiniBadge({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={heroMiniBadge}>
+      <div style={heroMiniLabel}>{label}</div>
+      <div style={heroMiniValue}>{value}</div>
+    </div>
+  );
+}
+
+function InsightMetric({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div style={insightMetricCard}>
+      <div style={insightMetricLabel}>{label}</div>
+      <div style={insightMetricValue}>{value}</div>
+    </div>
+  );
+}
+
+function FilterChip({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: "10px 12px",
+        borderRadius: 999,
+        border: "1px solid rgba(255,255,255,0.14)",
+        background: active ? "#ffffff" : "rgba(255,255,255,0.06)",
+        color: active ? "#0b1220" : "#f8fafc",
+        fontWeight: 900,
+        cursor: "pointer",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function ActiveFilter({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return (
+    <div style={activeFilterChip}>
+      <span>{label}</span>
+      <button onClick={onRemove} style={activeFilterRemove}>
+        ✕
+      </button>
+    </div>
+  );
+}
+
 function PreviewMetric({ label, value }: { label: string; value: string | number }) {
   return (
     <div style={previewMetric}>
@@ -984,11 +1302,37 @@ const pageShell: CSSProperties = {
   background: "linear-gradient(180deg, #0f172a 0%, #111827 45%, #0b1220 100%)",
   color: "#f8fafc",
   padding: 24,
+  position: "relative",
+  overflow: "hidden",
+};
+
+const backgroundGlowOne: CSSProperties = {
+  position: "absolute",
+  top: -120,
+  right: -100,
+  width: 320,
+  height: 320,
+  borderRadius: "50%",
+  background: "radial-gradient(circle, rgba(59,130,246,0.22), transparent 70%)",
+  pointerEvents: "none",
+};
+
+const backgroundGlowTwo: CSSProperties = {
+  position: "absolute",
+  bottom: -140,
+  left: -120,
+  width: 360,
+  height: 360,
+  borderRadius: "50%",
+  background: "radial-gradient(circle, rgba(168,85,247,0.16), transparent 70%)",
+  pointerEvents: "none",
 };
 
 const page: CSSProperties = {
   maxWidth: 1400,
   margin: "0 auto",
+  position: "relative",
+  zIndex: 1,
 };
 
 const hero: CSSProperties = {
@@ -1020,6 +1364,35 @@ const heroText: CSSProperties = {
   maxWidth: 760,
   color: "#cbd5e1",
   lineHeight: 1.6,
+};
+
+const heroMiniRow: CSSProperties = {
+  display: "flex",
+  gap: 10,
+  flexWrap: "wrap",
+  marginTop: 16,
+};
+
+const heroMiniBadge: CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.05)",
+};
+
+const heroMiniLabel: CSSProperties = {
+  fontSize: 11,
+  color: "#94a3b8",
+  fontWeight: 800,
+  textTransform: "uppercase",
+  letterSpacing: 0.6,
+};
+
+const heroMiniValue: CSSProperties = {
+  fontSize: 14,
+  color: "#fff",
+  fontWeight: 900,
+  marginTop: 4,
 };
 
 const heroActions: CSSProperties = {
@@ -1058,13 +1431,145 @@ const metricValue: CSSProperties = {
   color: "#fff",
 };
 
+const insightGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 16,
+  marginBottom: 18,
+};
+
+const twoColGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 16,
+  marginBottom: 18,
+};
+
+const insightCard: CSSProperties = {
+  borderRadius: 18,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(15,23,42,0.72)",
+  backdropFilter: "blur(10px)",
+  padding: 16,
+};
+
+const insightTitle: CSSProperties = {
+  fontSize: 17,
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const insightSub: CSSProperties = {
+  marginTop: 4,
+  fontSize: 13,
+  color: "#94a3b8",
+};
+
+const insightMetricGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(140px, 1fr))",
+  gap: 12,
+  marginTop: 14,
+};
+
+const insightMetricCard: CSSProperties = {
+  borderRadius: 14,
+  background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.08)",
+  padding: 14,
+};
+
+const insightMetricLabel: CSSProperties = {
+  fontSize: 12,
+  color: "#94a3b8",
+  fontWeight: 800,
+};
+
+const insightMetricValue: CSSProperties = {
+  marginTop: 8,
+  fontSize: 22,
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const distributionWrap: CSSProperties = {
+  display: "grid",
+  gap: 10,
+  marginTop: 14,
+};
+
+const distributionRow: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "42px 1fr 40px",
+  gap: 10,
+  alignItems: "center",
+};
+
+const distributionLetter: CSSProperties = {
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const distributionBarTrack: CSSProperties = {
+  height: 12,
+  borderRadius: 999,
+  background: "rgba(255,255,255,0.08)",
+  overflow: "hidden",
+};
+
+const distributionBarFill: CSSProperties = {
+  height: "100%",
+  borderRadius: 999,
+  background: "linear-gradient(90deg, rgba(96,165,250,0.95), rgba(168,85,247,0.95))",
+};
+
+const distributionCount: CSSProperties = {
+  textAlign: "right",
+  color: "#cbd5e1",
+  fontWeight: 800,
+};
+
+const listRow: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 12,
+  padding: "12px 14px",
+  borderRadius: 14,
+  background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.08)",
+};
+
+const listTitle: CSSProperties = {
+  fontSize: 14,
+  fontWeight: 800,
+  color: "#fff",
+};
+
+const listMeta: CSSProperties = {
+  marginTop: 4,
+  fontSize: 12,
+  color: "#94a3b8",
+};
+
+const listValue: CSSProperties = {
+  fontSize: 18,
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const emptyMini: CSSProperties = {
+  padding: "12px 0",
+  color: "#cbd5e1",
+};
+
 const toolbar: CSSProperties = {
   display: "flex",
   justifyContent: "space-between",
   alignItems: "center",
   gap: 12,
   flexWrap: "wrap",
-  marginBottom: 16,
+  marginBottom: 12,
 };
 
 const toolbarLeft: CSSProperties = {
@@ -1098,6 +1603,37 @@ const filterInput: CSSProperties = {
   background: "rgba(15,23,42,0.85)",
   color: "#fff",
   outline: "none",
+};
+
+const activeFilterRow: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  flexWrap: "wrap",
+  marginBottom: 16,
+};
+
+const activeFilterChip: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "8px 10px",
+  borderRadius: 999,
+  border: "1px solid rgba(96,165,250,0.22)",
+  background: "rgba(96,165,250,0.12)",
+  color: "#dbeafe",
+  fontSize: 12,
+  fontWeight: 800,
+};
+
+const activeFilterRemove: CSSProperties = {
+  width: 22,
+  height: 22,
+  borderRadius: 999,
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "rgba(255,255,255,0.08)",
+  color: "#fff",
+  cursor: "pointer",
+  fontWeight: 900,
 };
 
 const panel: CSSProperties = {
@@ -1247,6 +1783,15 @@ const alertBox: CSSProperties = {
   border: "1px solid rgba(239,68,68,0.22)",
   background: "rgba(127,29,29,0.24)",
   color: "#fecaca",
+};
+
+const successBox: CSSProperties = {
+  marginBottom: 16,
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid rgba(34,197,94,0.22)",
+  background: "rgba(20,83,45,0.24)",
+  color: "#bbf7d0",
 };
 
 const modalHeader: CSSProperties = {
