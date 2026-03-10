@@ -43,6 +43,17 @@ const RESOURCE_TYPES = [
 
 const VISIBILITY_OPTIONS = ["all", "teacher", "parent", "student"];
 
+const QUICK_CATEGORIES = [
+  "Mathematics",
+  "English",
+  "Science",
+  "Social Studies",
+  "Examination",
+  "Templates",
+  "Policies",
+  "Admin",
+];
+
 export default function ResourcesPage() {
   const [items, setItems] = useState<ResourceRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -115,13 +126,38 @@ export default function ResourcesPage() {
     const categories = new Set(items.map((x) => (x.category || "").trim()).filter(Boolean)).size;
     const visibleAll = items.filter((x) => (x.visibility || "all") === "all").length;
     const versions = items.filter((x) => Number(x.version || 1) > 1).length;
+    const worksheets = items.filter((x) => x.filetype === "worksheet").length;
+    const templates = items.filter((x) => x.filetype === "template").length;
 
-    return { total, categories, visibleAll, versions };
+    return { total, categories, visibleAll, versions, worksheets, templates };
   }, [items]);
 
-  function openUpload() {
+  const topCategories = useMemo(() => {
+    const counts = new Map<string, number>();
+
+    for (const item of items) {
+      const key = (item.category || "Uncategorized").trim() || "Uncategorized";
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+
+    return Array.from(counts.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 6);
+  }, [items]);
+
+  const recentResources = useMemo(() => {
+    return [...items]
+      .sort((a, b) => (b.upload_date || "").localeCompare(a.upload_date || ""))
+      .slice(0, 5);
+  }, [items]);
+
+  function openUpload(prefill?: Partial<UploadForm>) {
     setUploadOpen(true);
-    setForm(DEFAULT_FORM);
+    setForm({
+      ...DEFAULT_FORM,
+      ...prefill,
+    });
     setUploadFile(null);
     setFormError(null);
   }
@@ -221,24 +257,54 @@ export default function ResourcesPage() {
 
   return (
     <div style={pageShell}>
+      <div style={backgroundGlowOne} />
+      <div style={backgroundGlowTwo} />
+
       <div style={page}>
         <section style={hero}>
-          <div>
-            <div style={eyebrow}>Knowledge Center</div>
+          <div style={{ flex: 1, minWidth: 300 }}>
+            <div style={eyebrow}>Teacher & Admin Resource Hub</div>
             <h1 style={heroTitle}>Resources</h1>
             <p style={heroText}>
-              Upload, organize, version, and distribute school files such as lesson
-              notes, worksheets, presentations, templates, and policies.
+              Centralize lesson notes, worksheets, policies, guides, templates, and school
+              materials so teachers and administrators can work faster and stay aligned.
             </p>
+
+            <div style={heroBadgeRow}>
+              <HeroMiniBadge label="Teacher ready" value={`${stats.worksheets} worksheets`} />
+              <HeroMiniBadge label="Admin ready" value={`${stats.templates} templates`} />
+              <HeroMiniBadge label="Shared library" value={`${stats.visibleAll} public files`} />
+            </div>
           </div>
 
-          <div style={heroActions}>
-            <button onClick={() => void loadResources()} style={btnSecondary} disabled={loading || busy}>
-              Refresh
-            </button>
-            <button onClick={openUpload} style={btnPrimary} disabled={busy}>
-              + Upload Resource
-            </button>
+          <div style={heroRightCard}>
+            <div style={heroRightTitle}>Quick Actions</div>
+            <div style={heroQuickGrid}>
+              <button onClick={() => void loadResources()} style={quickActionBtn} disabled={loading || busy}>
+                <span style={quickIcon}>↻</span>
+                Refresh Library
+              </button>
+              <button onClick={() => openUpload()} style={quickActionBtnPrimary} disabled={busy}>
+                <span style={quickIcon}>＋</span>
+                Upload Resource
+              </button>
+              <button
+                onClick={() => openUpload({ type: "worksheet", category: "Examination", visibility: "student" })}
+                style={quickActionBtn}
+                disabled={busy}
+              >
+                <span style={quickIcon}>📝</span>
+                New Worksheet
+              </button>
+              <button
+                onClick={() => openUpload({ type: "template", category: "Templates", visibility: "teacher" })}
+                style={quickActionBtn}
+                disabled={busy}
+              >
+                <span style={quickIcon}>📋</span>
+                New Template
+              </button>
+            </div>
           </div>
         </section>
 
@@ -247,6 +313,85 @@ export default function ResourcesPage() {
           <StatCard label="Categories" value={String(stats.categories)} accent="purple" />
           <StatCard label="Visible To All" value={String(stats.visibleAll)} accent="green" />
           <StatCard label="Versioned Files" value={String(stats.versions)} accent="amber" />
+        </section>
+
+        <section style={insightGrid}>
+          <div style={insightCard}>
+            <div style={insightHeader}>
+              <div>
+                <div style={insightTitle}>Top Categories</div>
+                <div style={insightSub}>Most-used teaching and admin buckets</div>
+              </div>
+            </div>
+
+            {topCategories.length === 0 ? (
+              <div style={emptyMini}>No categories yet.</div>
+            ) : (
+              <div style={{ display: "grid", gap: 10 }}>
+                {topCategories.map((cat) => (
+                  <div key={cat.name} style={categoryRow}>
+                    <div>
+                      <div style={categoryName}>{cat.name}</div>
+                      <div style={categoryMeta}>Available in the shared library</div>
+                    </div>
+                    <div style={categoryCount}>{cat.count}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={insightCard}>
+            <div style={insightHeader}>
+              <div>
+                <div style={insightTitle}>Recent Uploads</div>
+                <div style={insightSub}>Latest files added by staff</div>
+              </div>
+            </div>
+
+            {recentResources.length === 0 ? (
+              <div style={emptyMini}>No recent uploads yet.</div>
+            ) : (
+              <div style={{ display: "grid", gap: 10 }}>
+                {recentResources.map((item) => (
+                  <div key={item.id} style={recentRow}>
+                    <div style={recentIcon}>{iconForType(item.filetype)}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={recentName}>{item.filename}</div>
+                      <div style={recentMeta}>
+                        {item.category || "Uncategorized"} • {formatDateTime(item.upload_date)}
+                      </div>
+                    </div>
+                    <a href={downloadUrl(item.id)} style={miniLinkBtn}>
+                      Open
+                    </a>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section style={shortcutSection}>
+          <div style={shortcutTitle}>Quick Category Upload</div>
+          <div style={shortcutSub}>Jump straight into the type of resource teachers and admins add most often.</div>
+
+          <div style={shortcutGrid}>
+            {QUICK_CATEGORIES.map((cat) => (
+              <button
+                key={cat}
+                style={shortcutBtn}
+                onClick={() =>
+                  openUpload({
+                    category: cat,
+                    type: cat === "Templates" ? "template" : cat === "Policies" ? "policy" : "file",
+                  })
+                }
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
         </section>
 
         {err && (
@@ -267,7 +412,9 @@ export default function ResourcesPage() {
           <div style={panelHeader}>
             <div>
               <div style={panelTitle}>Resource Library</div>
-              <div style={panelSub}>Search, filter, and manage uploaded files.</div>
+              <div style={panelSub}>
+                Search, filter, download, version, and manage school resources from one place.
+              </div>
             </div>
           </div>
 
@@ -329,7 +476,7 @@ export default function ResourcesPage() {
                       <div style={{ flex: 1 }}>
                         <div style={titleRow}>
                           <div style={fileIcon}>{iconForType(latest.filetype)}</div>
-                          <div>
+                          <div style={{ minWidth: 0 }}>
                             <div style={resourceTitle}>{latest.filename}</div>
                             <div style={resourceMeta}>
                               Uploaded {formatDateTime(latest.upload_date)}
@@ -342,7 +489,7 @@ export default function ResourcesPage() {
                           <Badge text={`TYPE: ${String(latest.filetype || "file").toUpperCase()}`} />
                           <Badge text={`CATEGORY: ${String(latest.category || "uncategorized").toUpperCase()}`} subtle />
                           <Badge text={`VISIBILITY: ${String(latest.visibility || "all").toUpperCase()}`} subtle />
-                          <Badge text={`V${latest.version || 1}`} />
+                          <Badge text={`VERSION ${latest.version || 1}`} />
                         </div>
                       </div>
 
@@ -406,6 +553,14 @@ export default function ResourcesPage() {
           <Modal title="Upload Resource" onClose={closeUpload}>
             {formError && <div style={{ ...errorAlert, marginBottom: 12 }}>{formError}</div>}
 
+            <div style={uploadTipCard}>
+              <div style={uploadTipTitle}>Helpful Tip</div>
+              <div style={uploadTipText}>
+                Use categories like <b>Mathematics</b>, <b>Science</b>, <b>Templates</b>, or <b>Policies</b> so
+                teachers and admins can find files faster.
+              </div>
+            </div>
+
             <div style={formGrid}>
               <Field label="Choose File" full>
                 <input
@@ -457,7 +612,7 @@ export default function ResourcesPage() {
                   value={form.category}
                   onChange={(e) => setForm((prev) => ({ ...prev, category: e.target.value }))}
                   style={fieldInput}
-                  placeholder="e.g. Mathematics, Policy, Templates"
+                  placeholder="e.g. Mathematics, Policies, Templates"
                 />
               </Field>
             </div>
@@ -561,6 +716,15 @@ function Badge({ text, subtle }: { text: string; subtle?: boolean }) {
   );
 }
 
+function HeroMiniBadge({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={heroMiniBadge}>
+      <div style={heroMiniLabel}>{label}</div>
+      <div style={heroMiniValue}>{value}</div>
+    </div>
+  );
+}
+
 function titleize(v: string) {
   return String(v || "")
     .split(/[-_\s]+/)
@@ -606,21 +770,47 @@ function extractErr(e: unknown, fallback: string) {
 
 const pageShell: CSSProperties = {
   minHeight: "100vh",
-  background: "linear-gradient(180deg, #0f172a 0%, #111827 45%, #0b1220 100%)",
+  background: "linear-gradient(180deg, #0b1220 0%, #111827 42%, #0f172a 100%)",
   color: "#f8fafc",
   padding: 24,
+  position: "relative",
+  overflow: "hidden",
+};
+
+const backgroundGlowOne: CSSProperties = {
+  position: "absolute",
+  top: -120,
+  right: -100,
+  width: 320,
+  height: 320,
+  borderRadius: "50%",
+  background: "radial-gradient(circle, rgba(59,130,246,0.22), transparent 70%)",
+  pointerEvents: "none",
+};
+
+const backgroundGlowTwo: CSSProperties = {
+  position: "absolute",
+  bottom: -160,
+  left: -120,
+  width: 360,
+  height: 360,
+  borderRadius: "50%",
+  background: "radial-gradient(circle, rgba(168,85,247,0.16), transparent 70%)",
+  pointerEvents: "none",
 };
 
 const page: CSSProperties = {
   maxWidth: 1380,
   margin: "0 auto",
+  position: "relative",
+  zIndex: 1,
 };
 
 const hero: CSSProperties = {
   display: "flex",
   justifyContent: "space-between",
-  alignItems: "flex-start",
-  gap: 16,
+  alignItems: "stretch",
+  gap: 18,
   flexWrap: "wrap",
   marginBottom: 18,
 };
@@ -635,7 +825,7 @@ const eyebrow: CSSProperties = {
 };
 
 const heroTitle: CSSProperties = {
-  fontSize: 32,
+  fontSize: 34,
   fontWeight: 950,
   margin: 0,
 };
@@ -647,10 +837,82 @@ const heroText: CSSProperties = {
   lineHeight: 1.6,
 };
 
-const heroActions: CSSProperties = {
+const heroBadgeRow: CSSProperties = {
   display: "flex",
   gap: 10,
   flexWrap: "wrap",
+  marginTop: 16,
+};
+
+const heroMiniBadge: CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.05)",
+};
+
+const heroMiniLabel: CSSProperties = {
+  fontSize: 11,
+  color: "#94a3b8",
+  fontWeight: 800,
+  textTransform: "uppercase",
+  letterSpacing: 0.6,
+};
+
+const heroMiniValue: CSSProperties = {
+  fontSize: 14,
+  color: "#fff",
+  fontWeight: 900,
+  marginTop: 4,
+};
+
+const heroRightCard: CSSProperties = {
+  minWidth: 320,
+  flex: "0 0 360px",
+  borderRadius: 18,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(15,23,42,0.74)",
+  backdropFilter: "blur(10px)",
+  padding: 18,
+};
+
+const heroRightTitle: CSSProperties = {
+  fontSize: 16,
+  fontWeight: 900,
+  marginBottom: 12,
+};
+
+const heroQuickGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 10,
+};
+
+const quickActionBtn: CSSProperties = {
+  padding: "12px 12px",
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.12)",
+  background: "rgba(255,255,255,0.05)",
+  color: "#fff",
+  fontWeight: 800,
+  cursor: "pointer",
+  textAlign: "left",
+};
+
+const quickActionBtnPrimary: CSSProperties = {
+  padding: "12px 12px",
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "#ffffff",
+  color: "#0b1220",
+  fontWeight: 900,
+  cursor: "pointer",
+  textAlign: "left",
+};
+
+const quickIcon: CSSProperties = {
+  display: "inline-block",
+  marginRight: 8,
 };
 
 const statsGrid: CSSProperties = {
@@ -658,6 +920,145 @@ const statsGrid: CSSProperties = {
   gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
   gap: 12,
   marginBottom: 18,
+};
+
+const insightGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 16,
+  marginBottom: 18,
+};
+
+const insightCard: CSSProperties = {
+  borderRadius: 18,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(15,23,42,0.72)",
+  backdropFilter: "blur(10px)",
+  padding: 16,
+};
+
+const insightHeader: CSSProperties = {
+  marginBottom: 14,
+};
+
+const insightTitle: CSSProperties = {
+  fontSize: 17,
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const insightSub: CSSProperties = {
+  marginTop: 4,
+  fontSize: 13,
+  color: "#94a3b8",
+};
+
+const categoryRow: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 12,
+  padding: "12px 14px",
+  borderRadius: 14,
+  background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.08)",
+};
+
+const categoryName: CSSProperties = {
+  fontSize: 14,
+  fontWeight: 800,
+  color: "#fff",
+};
+
+const categoryMeta: CSSProperties = {
+  marginTop: 4,
+  fontSize: 12,
+  color: "#94a3b8",
+};
+
+const categoryCount: CSSProperties = {
+  minWidth: 36,
+  height: 36,
+  borderRadius: 999,
+  display: "grid",
+  placeItems: "center",
+  fontWeight: 900,
+  background: "rgba(96,165,250,0.16)",
+  color: "#dbeafe",
+};
+
+const recentRow: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+  padding: "12px 14px",
+  borderRadius: 14,
+  background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.08)",
+};
+
+const recentIcon: CSSProperties = {
+  width: 40,
+  height: 40,
+  borderRadius: 12,
+  display: "grid",
+  placeItems: "center",
+  background: "rgba(96,165,250,0.14)",
+  fontSize: 18,
+  flexShrink: 0,
+};
+
+const recentName: CSSProperties = {
+  fontSize: 14,
+  fontWeight: 800,
+  color: "#fff",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const recentMeta: CSSProperties = {
+  marginTop: 4,
+  fontSize: 12,
+  color: "#94a3b8",
+};
+
+const shortcutSection: CSSProperties = {
+  marginBottom: 18,
+  borderRadius: 18,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(15,23,42,0.72)",
+  backdropFilter: "blur(10px)",
+  padding: 16,
+};
+
+const shortcutTitle: CSSProperties = {
+  fontSize: 17,
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const shortcutSub: CSSProperties = {
+  marginTop: 4,
+  fontSize: 13,
+  color: "#94a3b8",
+};
+
+const shortcutGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+  gap: 10,
+  marginTop: 14,
+};
+
+const shortcutBtn: CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.05)",
+  color: "#fff",
+  fontWeight: 800,
+  cursor: "pointer",
 };
 
 const panel: CSSProperties = {
@@ -714,6 +1115,11 @@ const fieldInput: CSSProperties = {
 
 const emptyState: CSSProperties = {
   padding: 22,
+  color: "#cbd5e1",
+};
+
+const emptyMini: CSSProperties = {
+  padding: "10px 0",
   color: "#cbd5e1",
 };
 
@@ -816,6 +1222,27 @@ const versionMeta: CSSProperties = {
   marginTop: 4,
   color: "#94a3b8",
   fontSize: 12,
+};
+
+const uploadTipCard: CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 14,
+  border: "1px solid rgba(96,165,250,0.18)",
+  background: "rgba(96,165,250,0.08)",
+  marginBottom: 14,
+};
+
+const uploadTipTitle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 900,
+  color: "#dbeafe",
+  marginBottom: 6,
+};
+
+const uploadTipText: CSSProperties = {
+  fontSize: 13,
+  color: "#cbd5e1",
+  lineHeight: 1.5,
 };
 
 const formGrid: CSSProperties = {
