@@ -5,6 +5,8 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 
 type Audience = "all" | "teachers" | "parents" | "students";
+type SortValue = "date-asc" | "date-desc" | "title" | "audience";
+type ViewMode = "upcoming" | "past" | "all";
 
 type SchoolEvent = {
   id: number;
@@ -42,11 +44,14 @@ export default function EventsPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
   const [items, setItems] = useState<SchoolEvent[]>([]);
   const [search, setSearch] = useState("");
   const [audience, setAudience] = useState<Audience | "">("");
   const [dateFilter, setDateFilter] = useState("");
+  const [sortBy, setSortBy] = useState<SortValue>("date-asc");
+  const [viewMode, setViewMode] = useState<ViewMode>("upcoming");
 
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<"create" | "edit">("create");
@@ -80,41 +85,105 @@ export default function EventsPage() {
 
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    if (!needle) return items;
+    const today = todayLocalISO();
 
-    return items.filter((event) => {
+    let list = items.filter((event) => {
       const title = (event.title || "").toLowerCase();
       const description = (event.description || "").toLowerCase();
       const location = (event.location || "").toLowerCase();
       const audienceText = (event.audience || "").toLowerCase();
 
-      return (
+      const matchesSearch =
+        !needle ||
         title.includes(needle) ||
         description.includes(needle) ||
         location.includes(needle) ||
         audienceText.includes(needle) ||
-        event.date.includes(needle)
-      );
+        event.date.includes(needle);
+
+      const matchesView =
+        viewMode === "all" ||
+        (viewMode === "upcoming" && event.date >= today) ||
+        (viewMode === "past" && event.date < today);
+
+      return matchesSearch && matchesView;
     });
-  }, [items, search]);
+
+    list = [...list].sort((a, b) => {
+      if (sortBy === "date-desc") {
+        const dateCompare = b.date.localeCompare(a.date);
+        if (dateCompare !== 0) return dateCompare;
+        return (b.start_time || "99:99").localeCompare(a.start_time || "99:99");
+      }
+
+      if (sortBy === "title") {
+        return a.title.localeCompare(b.title);
+      }
+
+      if (sortBy === "audience") {
+        return a.audience.localeCompare(b.audience) || a.date.localeCompare(b.date);
+      }
+
+      const dateCompare = a.date.localeCompare(b.date);
+      if (dateCompare !== 0) return dateCompare;
+      return (a.start_time || "99:99").localeCompare(b.start_time || "99:99");
+    });
+
+    return list;
+  }, [items, search, sortBy, viewMode]);
 
   const stats = useMemo(() => {
     const total = items.length;
     const today = todayLocalISO();
     const upcoming = items.filter((x) => x.date >= today).length;
+    const todayCount = items.filter((x) => x.date === today).length;
     const teachers = items.filter((x) => x.audience === "teachers").length;
     const parents = items.filter((x) => x.audience === "parents").length;
     const students = items.filter((x) => x.audience === "students").length;
+    const allAudience = items.filter((x) => x.audience === "all").length;
 
-    return { total, upcoming, teachers, parents, students };
+    return { total, upcoming, todayCount, teachers, parents, students, allAudience };
   }, [items]);
 
-  function openCreate() {
+  const groupedByDate = useMemo(() => {
+    const map = new Map<string, SchoolEvent[]>();
+
+    for (const event of filtered) {
+      if (!map.has(event.date)) map.set(event.date, []);
+      map.get(event.date)!.push(event);
+    }
+
+    return Array.from(map.entries()).map(([date, events]) => ({
+      date,
+      events,
+    }));
+  }, [filtered]);
+
+  const upcomingHighlights = useMemo(() => {
+    const today = todayLocalISO();
+    return sortEvents(items.filter((x) => x.date >= today)).slice(0, 4);
+  }, [items]);
+
+  const locations = useMemo(() => {
+    const values = new Set<string>();
+    items.forEach((item) => {
+      const loc = (item.location || "").trim();
+      if (loc) values.add(loc);
+    });
+    return Array.from(values).slice(0, 6);
+  }, [items]);
+
+  const hasActiveFilters = Boolean(
+    search.trim() || audience || dateFilter || sortBy !== "date-asc" || viewMode !== "upcoming"
+  );
+
+  function openCreate(prefill?: Partial<EventForm>) {
     setMode("create");
     setEditing(null);
     setForm({
       ...emptyForm,
       date: dateFilter || todayLocalISO(),
+      ...prefill,
     });
     setFormError(null);
     setOpen(true);
@@ -141,16 +210,31 @@ export default function EventsPage() {
     setOpen(false);
   }
 
+  function resetFilters() {
+    setAudience("");
+    setDateFilter("");
+    setSearch("");
+    setSortBy("date-asc");
+    setViewMode("upcoming");
+  }
+
   function validate(payload: EventForm): string | null {
     if (!payload.title.trim()) return "Title is required.";
+    if (payload.title.trim().length < 4) return "Title must be at least 4 characters.";
     if (!payload.date.trim()) return "Date is required.";
     if (payload.start_time && !isTime(payload.start_time)) return "Start time must be HH:MM.";
     if (payload.end_time && !isTime(payload.end_time)) return "End time must be HH:MM.";
+    if (payload.start_time && payload.end_time && payload.start_time > payload.end_time) {
+      return "End time must be after start time.";
+    }
     return null;
   }
 
   async function submit() {
     setFormError(null);
+    setError(null);
+    setSuccess(null);
+
     const validation = validate(form);
     if (validation) {
       setFormError(validation);
@@ -179,6 +263,8 @@ export default function EventsPage() {
         } else {
           await load();
         }
+
+        setSuccess("Event created successfully.");
       } else {
         if (!editing?.id) throw new Error("No event selected.");
         const res = await api.put(`/events/${editing.id}`, payload);
@@ -189,6 +275,8 @@ export default function EventsPage() {
         } else {
           await load();
         }
+
+        setSuccess("Event updated successfully.");
       }
 
       setOpen(false);
@@ -205,12 +293,14 @@ export default function EventsPage() {
 
     setBusy(true);
     setError(null);
+    setSuccess(null);
 
     const previous = items;
     setItems((prev) => prev.filter((x) => x.id !== event.id));
 
     try {
       await api.delete(`/events/${event.id}`);
+      setSuccess("Event deleted.");
     } catch (e: unknown) {
       setItems(previous);
       setError(extractErr(e, "Failed to delete event"));
@@ -234,13 +324,22 @@ export default function EventsPage() {
                 Manage school events, calendars, reminders, and audience-specific schedules
                 from one organized workspace.
               </p>
+
+              <div style={heroMiniStats}>
+                <HeroMiniBadge label="Upcoming" value={String(stats.upcoming)} />
+                <HeroMiniBadge label="Today" value={String(stats.todayCount)} />
+                <HeroMiniBadge label="Total" value={String(stats.total)} />
+              </div>
             </div>
 
             <div style={heroActions}>
               <button onClick={() => void load()} style={btnSecondary} disabled={loading || busy}>
                 Refresh
               </button>
-              <button onClick={openCreate} style={btnPrimary} disabled={busy}>
+              <button onClick={() => openCreate({ audience: "all" })} style={btnSecondary} disabled={busy}>
+                School-wide
+              </button>
+              <button onClick={() => openCreate()} style={btnPrimary} disabled={busy}>
                 + New Event
               </button>
             </div>
@@ -250,9 +349,61 @@ export default function EventsPage() {
         <section style={statsGrid}>
           <StatCard label="Total Events" value={stats.total} accent="blue" />
           <StatCard label="Upcoming" value={stats.upcoming} accent="green" />
+          <StatCard label="Today" value={stats.todayCount} accent="red" />
           <StatCard label="Teachers" value={stats.teachers} accent="amber" />
           <StatCard label="Parents" value={stats.parents} accent="violet" />
           <StatCard label="Students" value={stats.students} accent="slate" />
+        </section>
+
+        <section style={insightGrid}>
+          <div style={insightCard}>
+            <div style={insightTitle}>Upcoming Highlights</div>
+            <div style={insightSub}>Next key items on the school calendar</div>
+
+            {upcomingHighlights.length === 0 ? (
+              <div style={emptyMini}>No upcoming events yet.</div>
+            ) : (
+              <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+                {upcomingHighlights.map((event) => (
+                  <button
+                    key={event.id}
+                    style={highlightRowBtn}
+                    onClick={() => openEdit(event)}
+                  >
+                    <div style={highlightRow}>
+                      <div style={highlightIcon}>📅</div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={highlightTitle}>{event.title}</div>
+                        <div style={highlightMeta}>
+                          {formatDate(event.date)} • {formatTimeRange(event.start_time, event.end_time)}
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={insightCard}>
+            <div style={insightTitle}>Quick Event Lanes</div>
+            <div style={insightSub}>Create common school events faster</div>
+
+            <div style={quickCreateGrid}>
+              <button style={quickCreateBtn} onClick={() => openCreate({ audience: "teachers", title: "Staff Meeting" })}>
+                👩‍🏫 Staff Meeting
+              </button>
+              <button style={quickCreateBtn} onClick={() => openCreate({ audience: "parents", title: "Parent Meeting" })}>
+                👨‍👩‍👧 Parent Meeting
+              </button>
+              <button style={quickCreateBtn} onClick={() => openCreate({ audience: "students", title: "Student Assembly" })}>
+                🎓 Student Assembly
+              </button>
+              <button style={quickCreateBtn} onClick={() => openCreate({ audience: "all", title: "School Event" })}>
+                🏫 School-wide Event
+              </button>
+            </div>
+          </div>
         </section>
 
         <section style={toolbar}>
@@ -276,26 +427,67 @@ export default function EventsPage() {
                 style={fieldInput}
               />
             </div>
+
+            <div style={fieldBlock}>
+              <label style={fieldLabel}>Sort</label>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as SortValue)}
+                style={fieldInput}
+              >
+                <option value="date-asc">Date ascending</option>
+                <option value="date-desc">Date descending</option>
+                <option value="title">Title</option>
+                <option value="audience">Audience</option>
+              </select>
+            </div>
           </div>
 
           <div style={toolbarRight}>
+            <Chip active={viewMode === "upcoming"} onClick={() => setViewMode("upcoming")} label="Upcoming" />
+            <Chip active={viewMode === "past"} onClick={() => setViewMode("past")} label="Past" />
+            <Chip active={viewMode === "all"} onClick={() => setViewMode("all")} label="All Dates" />
             <Chip active={audience === ""} onClick={() => setAudience("")} label="All Audiences" />
             <Chip active={audience === "all"} onClick={() => setAudience("all")} label="All" />
             <Chip active={audience === "teachers"} onClick={() => setAudience("teachers")} label="Teachers" />
             <Chip active={audience === "parents"} onClick={() => setAudience("parents")} label="Parents" />
             <Chip active={audience === "students"} onClick={() => setAudience("students")} label="Students" />
-            <button
-              onClick={() => {
-                setAudience("");
-                setDateFilter("");
-                setSearch("");
-              }}
-              style={btnSecondary}
-            >
+            <button onClick={resetFilters} style={btnSecondary}>
               Reset
             </button>
           </div>
         </section>
+
+        {hasActiveFilters && (
+          <div style={chipBar}>
+            {search.trim() ? <ActiveChip label={`Search: ${search.trim()}`} onRemove={() => setSearch("")} /> : null}
+            {dateFilter ? <ActiveChip label={`Date: ${dateFilter}`} onRemove={() => setDateFilter("")} /> : null}
+            {audience ? <ActiveChip label={`Audience: ${capitalize(audience)}`} onRemove={() => setAudience("")} /> : null}
+            {viewMode !== "upcoming" ? (
+              <ActiveChip label={`View: ${capitalize(viewMode)}`} onRemove={() => setViewMode("upcoming")} />
+            ) : null}
+            {sortBy !== "date-asc" ? (
+              <ActiveChip label={`Sort: ${sortLabel(sortBy)}`} onRemove={() => setSortBy("date-asc")} />
+            ) : null}
+          </div>
+        )}
+
+        {locations.length > 0 && (
+          <section style={locationsCard}>
+            <div style={locationsTitle}>Popular Locations</div>
+            <div style={locationsWrap}>
+              {locations.map((location) => (
+                <button
+                  key={location}
+                  style={locationPill}
+                  onClick={() => setSearch(location)}
+                >
+                  📍 {location}
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
 
         {error && (
           <div style={alertBox}>
@@ -304,12 +496,25 @@ export default function EventsPage() {
           </div>
         )}
 
+        {success && (
+          <div style={successBox}>
+            <strong style={{ marginRight: 8 }}>Success:</strong>
+            {success}
+          </div>
+        )}
+
         <section style={panel}>
           <div style={panelHeader}>
-            <div>
-              <div style={panelTitle}>Event Schedule</div>
-              <div style={panelSubtitle}>
-                {loading ? "Loading events..." : `${filtered.length} event(s) shown`}
+            <div style={panelHeaderTop}>
+              <div>
+                <div style={panelTitle}>Event Schedule</div>
+                <div style={panelSubtitle}>
+                  {loading ? "Loading events..." : `${filtered.length} event(s) shown`}
+                </div>
+              </div>
+
+              <div style={resultPill}>
+                {filtered.length} visible
               </div>
             </div>
           </div>
@@ -321,50 +526,65 @@ export default function EventsPage() {
             </div>
           ) : filtered.length === 0 ? (
             <div style={emptyState}>
+              <div style={emptyStateIcon}>🗓️</div>
               <div style={emptyStateTitle}>No events found</div>
               <div style={emptyStateText}>
                 Create your first event or adjust the filters.
               </div>
+              <div style={emptyActions}>
+                <button onClick={resetFilters} style={btnSecondary}>
+                  Clear Filters
+                </button>
+                <button onClick={() => openCreate()} style={btnPrimary}>
+                  + New Event
+                </button>
+              </div>
             </div>
           ) : (
             <div style={eventList}>
-              {sortEvents(filtered).map((event) => (
-                <article key={event.id} style={eventCard}>
-                  <div style={eventTop}>
-                    <div style={{ flex: 1 }}>
-                      <div style={eventTitleRow}>
-                        <h3 style={eventTitle}>{event.title}</h3>
-                        <Badge text={`AUDIENCE: ${String(event.audience || "all").toUpperCase()}`} />
-                        {isUpcoming(event.date) && <Badge text="UPCOMING" subtle />}
-                      </div>
+              {groupedByDate.map((group) => (
+                <div key={group.date}>
+                  <div style={dateDivider}>{formatDate(group.date)}</div>
+                  {group.events.map((event) => (
+                    <article key={event.id} style={eventCard}>
+                      <div style={eventTop}>
+                        <div style={{ flex: 1 }}>
+                          <div style={eventTitleRow}>
+                            <h3 style={eventTitle}>{event.title}</h3>
+                            <Badge text={`AUDIENCE: ${String(event.audience || "all").toUpperCase()}`} />
+                            {isUpcoming(event.date) && <Badge text="UPCOMING" subtle />}
+                            {event.date === todayLocalISO() && <Badge text="TODAY" subtle />}
+                          </div>
 
-                      <div style={eventMetaRow}>
-                        <div style={metaPill}>📅 {formatDate(event.date)}</div>
-                        <div style={metaPill}>🕒 {formatTimeRange(event.start_time, event.end_time)}</div>
-                        <div style={metaPill}>📍 {event.location || "No location set"}</div>
-                      </div>
+                          <div style={eventMetaRow}>
+                            <div style={metaPill}>📅 {formatDate(event.date)}</div>
+                            <div style={metaPill}>🕒 {formatTimeRange(event.start_time, event.end_time)}</div>
+                            <div style={metaPill}>📍 {event.location || "No location set"}</div>
+                          </div>
 
-                      <div style={eventBody}>
-                        {event.description?.trim() ? event.description : "No description provided."}
-                      </div>
+                          <div style={eventBody}>
+                            {event.description?.trim() ? event.description : "No description provided."}
+                          </div>
 
-                      <div style={metaText}>
-                        {event.created_at
-                          ? `Created: ${formatDateTime(event.created_at)}`
-                          : "Created timestamp unavailable"}
-                      </div>
-                    </div>
+                          <div style={metaText}>
+                            {event.created_at
+                              ? `Created: ${formatDateTime(event.created_at)}`
+                              : "Created timestamp unavailable"}
+                          </div>
+                        </div>
 
-                    <div style={actionsCol}>
-                      <button style={btnSecondary} onClick={() => openEdit(event)} disabled={busy}>
-                        Edit
-                      </button>
-                      <button style={btnDanger} onClick={() => void remove(event)} disabled={busy}>
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                </article>
+                        <div style={actionsCol}>
+                          <button style={btnSecondary} onClick={() => openEdit(event)} disabled={busy}>
+                            Edit
+                          </button>
+                          <button style={btnDanger} onClick={() => void remove(event)} disabled={busy}>
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
               ))}
             </div>
           )}
@@ -373,6 +593,13 @@ export default function EventsPage() {
         {open && (
           <Modal title={mode === "create" ? "New Event" : "Edit Event"} onClose={closeModal}>
             {formError && <div style={{ ...alertBox, marginBottom: 12 }}>{formError}</div>}
+
+            <div style={composeCard}>
+              <div style={composeTitle}>Event Planning</div>
+              <div style={composeSub}>
+                Add clear event details so teachers, parents, and students know exactly when and where to show up.
+              </div>
+            </div>
 
             <div style={formGrid}>
               <Field label="Title" full>
@@ -445,13 +672,20 @@ export default function EventsPage() {
               </Field>
             </div>
 
-            <div style={modalActions}>
-              <button style={btnSecondary} onClick={closeModal} disabled={busy}>
-                Cancel
-              </button>
-              <button style={btnPrimary} onClick={() => void submit()} disabled={busy}>
-                {busy ? "Saving..." : "Save Event"}
-              </button>
+            <div style={composeFooter}>
+              <div style={composeHint}>
+                Audience: <b>{capitalize(form.audience)}</b> • Schedule:{" "}
+                <b>{formatTimeRange(form.start_time || null, form.end_time || null)}</b>
+              </div>
+
+              <div style={modalActions}>
+                <button style={btnSecondary} onClick={closeModal} disabled={busy}>
+                  Cancel
+                </button>
+                <button style={btnPrimary} onClick={() => void submit()} disabled={busy}>
+                  {busy ? "Saving..." : mode === "create" ? "Create Event" : "Save Changes"}
+                </button>
+              </div>
             </div>
           </Modal>
         )}
@@ -467,7 +701,7 @@ function StatCard({
 }: {
   label: string;
   value: number;
-  accent: "blue" | "green" | "amber" | "violet" | "slate";
+  accent: "blue" | "green" | "amber" | "violet" | "slate" | "red";
 }) {
   const accentMap: Record<string, string> = {
     blue: "rgba(59,130,246,0.22)",
@@ -475,12 +709,22 @@ function StatCard({
     amber: "rgba(245,158,11,0.22)",
     violet: "rgba(139,92,246,0.22)",
     slate: "rgba(148,163,184,0.18)",
+    red: "rgba(239,68,68,0.20)",
   };
 
   return (
     <div style={{ ...statCard, boxShadow: `inset 0 0 0 1px ${accentMap[accent]}` }}>
       <div style={statLabel}>{label}</div>
       <div style={statValue}>{value}</div>
+    </div>
+  );
+}
+
+function HeroMiniBadge({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={heroMiniBadge}>
+      <div style={heroMiniLabel}>{label}</div>
+      <div style={heroMiniValue}>{value}</div>
     </div>
   );
 }
@@ -509,6 +753,17 @@ function Chip({
     >
       {label}
     </button>
+  );
+}
+
+function ActiveChip({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return (
+    <div style={activeChip}>
+      <span>{label}</span>
+      <button onClick={onRemove} style={activeChipBtn}>
+        ✕
+      </button>
+    </div>
   );
 }
 
@@ -704,6 +959,17 @@ function sortEvents(list: SchoolEvent[]) {
   });
 }
 
+function capitalize(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function sortLabel(value: SortValue) {
+  if (value === "date-desc") return "Date descending";
+  if (value === "title") return "Title";
+  if (value === "audience") return "Audience";
+  return "Date ascending";
+}
+
 const pageShell: CSSProperties = {
   minHeight: "100vh",
   background:
@@ -789,11 +1055,127 @@ const heroActions: CSSProperties = {
   flexWrap: "wrap",
 };
 
+const heroMiniStats: CSSProperties = {
+  display: "flex",
+  gap: 10,
+  flexWrap: "wrap",
+  marginTop: 16,
+};
+
+const heroMiniBadge: CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.05)",
+};
+
+const heroMiniLabel: CSSProperties = {
+  fontSize: 11,
+  color: "#94a3b8",
+  fontWeight: 800,
+  textTransform: "uppercase",
+  letterSpacing: 0.6,
+};
+
+const heroMiniValue: CSSProperties = {
+  fontSize: 14,
+  color: "#fff",
+  fontWeight: 900,
+  marginTop: 4,
+};
+
 const statsGrid: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
   gap: 12,
   marginBottom: 18,
+};
+
+const insightGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 16,
+  marginBottom: 18,
+};
+
+const insightCard: CSSProperties = {
+  borderRadius: 18,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(15,23,42,0.62)",
+  backdropFilter: "blur(6px)",
+  boxShadow: "0 10px 30px rgba(0,0,0,0.12)",
+  padding: 16,
+};
+
+const insightTitle: CSSProperties = {
+  fontSize: 17,
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const insightSub: CSSProperties = {
+  marginTop: 4,
+  fontSize: 13,
+  color: "#94a3b8",
+};
+
+const highlightRowBtn: CSSProperties = {
+  border: "none",
+  background: "transparent",
+  padding: 0,
+  textAlign: "left",
+  cursor: "pointer",
+};
+
+const highlightRow: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+  padding: "12px 14px",
+  borderRadius: 14,
+  background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.08)",
+};
+
+const highlightIcon: CSSProperties = {
+  width: 40,
+  height: 40,
+  borderRadius: 12,
+  display: "grid",
+  placeItems: "center",
+  background: "rgba(96,165,250,0.14)",
+  fontSize: 18,
+  flexShrink: 0,
+};
+
+const highlightTitle: CSSProperties = {
+  fontSize: 14,
+  fontWeight: 800,
+  color: "#fff",
+};
+
+const highlightMeta: CSSProperties = {
+  marginTop: 4,
+  fontSize: 12,
+  color: "#94a3b8",
+};
+
+const quickCreateGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 10,
+  marginTop: 14,
+};
+
+const quickCreateBtn: CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.05)",
+  color: "#fff",
+  fontWeight: 800,
+  cursor: "pointer",
+  textAlign: "left",
 };
 
 const statCard: CSSProperties = {
@@ -826,7 +1208,7 @@ const toolbar: CSSProperties = {
   alignItems: "flex-end",
   gap: 16,
   flexWrap: "wrap",
-  marginBottom: 16,
+  marginBottom: 8,
 };
 
 const toolbarLeft: CSSProperties = {
@@ -904,6 +1286,68 @@ const iconBtn: CSSProperties = {
   cursor: "pointer",
 };
 
+const chipBar: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  flexWrap: "wrap",
+  marginBottom: 16,
+};
+
+const activeChip: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "8px 10px",
+  borderRadius: 999,
+  border: "1px solid rgba(96,165,250,0.22)",
+  background: "rgba(96,165,250,0.12)",
+  color: "#dbeafe",
+  fontSize: 12,
+  fontWeight: 800,
+};
+
+const activeChipBtn: CSSProperties = {
+  width: 22,
+  height: 22,
+  borderRadius: 999,
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "rgba(255,255,255,0.08)",
+  color: "#fff",
+  cursor: "pointer",
+  fontWeight: 900,
+};
+
+const locationsCard: CSSProperties = {
+  marginBottom: 16,
+  borderRadius: 18,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(15,23,42,0.62)",
+  padding: 16,
+};
+
+const locationsTitle: CSSProperties = {
+  fontSize: 14,
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const locationsWrap: CSSProperties = {
+  display: "flex",
+  gap: 10,
+  flexWrap: "wrap",
+  marginTop: 12,
+};
+
+const locationPill: CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 999,
+  border: "1px solid rgba(255,255,255,0.12)",
+  background: "rgba(255,255,255,0.05)",
+  color: "#e2e8f0",
+  fontWeight: 800,
+  cursor: "pointer",
+};
+
 const alertBox: CSSProperties = {
   marginBottom: 16,
   padding: "12px 14px",
@@ -911,6 +1355,15 @@ const alertBox: CSSProperties = {
   border: "1px solid rgba(239,68,68,0.35)",
   background: "rgba(239,68,68,0.12)",
   color: "#fee2e2",
+};
+
+const successBox: CSSProperties = {
+  marginBottom: 16,
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid rgba(34,197,94,0.28)",
+  background: "rgba(34,197,94,0.12)",
+  color: "#dcfce7",
 };
 
 const panel: CSSProperties = {
@@ -928,6 +1381,14 @@ const panelHeader: CSSProperties = {
   borderBottom: "1px solid rgba(255,255,255,0.08)",
 };
 
+const panelHeaderTop: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "center",
+  flexWrap: "wrap",
+};
+
 const panelTitle: CSSProperties = {
   fontWeight: 900,
   fontSize: 18,
@@ -939,10 +1400,24 @@ const panelSubtitle: CSSProperties = {
   fontSize: 13,
 };
 
+const resultPill: CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 999,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.05)",
+  color: "#e2e8f0",
+  fontSize: 12,
+  fontWeight: 800,
+};
+
 const emptyState: CSSProperties = {
   padding: 28,
   textAlign: "center",
   color: "#cbd5e1",
+};
+
+const emptyStateIcon: CSSProperties = {
+  fontSize: 34,
 };
 
 const emptyStateTitle: CSSProperties = {
@@ -955,6 +1430,30 @@ const emptyStateText: CSSProperties = {
   marginTop: 8,
   fontSize: 14,
   opacity: 0.82,
+};
+
+const emptyActions: CSSProperties = {
+  display: "flex",
+  justifyContent: "center",
+  gap: 10,
+  flexWrap: "wrap",
+  marginTop: 18,
+};
+
+const emptyMini: CSSProperties = {
+  padding: "10px 0",
+  color: "#cbd5e1",
+};
+
+const dateDivider: CSSProperties = {
+  padding: "12px 16px",
+  fontWeight: 900,
+  color: "#cbd5e1",
+  fontSize: 13,
+  borderTop: "1px solid rgba(255,255,255,0.08)",
+  borderBottom: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(255,255,255,0.03)",
+  letterSpacing: 0.4,
 };
 
 const eventList: CSSProperties = {
@@ -1026,15 +1525,49 @@ const actionsCol: CSSProperties = {
   justifyContent: "flex-end",
 };
 
+const composeCard: CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 14,
+  border: "1px solid rgba(96,165,250,0.18)",
+  background: "rgba(96,165,250,0.08)",
+  marginBottom: 14,
+};
+
+const composeTitle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 900,
+  color: "#dbeafe",
+  marginBottom: 6,
+};
+
+const composeSub: CSSProperties = {
+  fontSize: 13,
+  color: "#cbd5e1",
+  lineHeight: 1.5,
+};
+
 const formGrid: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "1fr 1fr",
   gap: 12,
 };
 
+const composeFooter: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "center",
+  flexWrap: "wrap",
+  marginTop: 14,
+};
+
+const composeHint: CSSProperties = {
+  fontSize: 13,
+  color: "#cbd5e1",
+};
+
 const modalActions: CSSProperties = {
   display: "flex",
   justifyContent: "flex-end",
   gap: 10,
-  marginTop: 14,
 };
