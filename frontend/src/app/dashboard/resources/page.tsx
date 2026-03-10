@@ -24,6 +24,8 @@ type UploadForm = {
   visibility: string;
 };
 
+type SortValue = "newest" | "oldest" | "name-asc" | "name-desc" | "category" | "versions";
+
 const DEFAULT_FORM: UploadForm = {
   type: "file",
   uploader: "",
@@ -54,6 +56,9 @@ const QUICK_CATEGORIES = [
   "Admin",
 ];
 
+const FAVORITES_KEY = "resources:favorites:v1";
+const PINNED_KEY = "resources:pinned:v1";
+
 export default function ResourcesPage() {
   const [items, setItems] = useState<ResourceRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,6 +70,7 @@ export default function ResourcesPage() {
   const [typeFilter, setTypeFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [visibilityFilter, setVisibilityFilter] = useState("");
+  const [sortBy, setSortBy] = useState<SortValue>("newest");
 
   const [uploadOpen, setUploadOpen] = useState(false);
   const [form, setForm] = useState<UploadForm>(DEFAULT_FORM);
@@ -73,6 +79,37 @@ export default function ResourcesPage() {
 
   const versionInputRef = useRef<HTMLInputElement | null>(null);
   const [versionTarget, setVersionTarget] = useState<ResourceRow | null>(null);
+
+  const [favoriteRoots, setFavoriteRoots] = useState<number[]>([]);
+  const [pinnedRoots, setPinnedRoots] = useState<number[]>([]);
+
+  useEffect(() => {
+    try {
+      const rawFav = window.localStorage.getItem(FAVORITES_KEY);
+      const rawPinned = window.localStorage.getItem(PINNED_KEY);
+
+      if (rawFav) setFavoriteRoots(safeParseNumberArray(rawFav));
+      if (rawPinned) setPinnedRoots(safeParseNumberArray(rawPinned));
+    } catch {
+      // ignore localStorage errors
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(FAVORITES_KEY, JSON.stringify(favoriteRoots));
+    } catch {
+      // ignore localStorage errors
+    }
+  }, [favoriteRoots]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(PINNED_KEY, JSON.stringify(pinnedRoots));
+    } catch {
+      // ignore localStorage errors
+    }
+  }, [pinnedRoots]);
 
   async function loadResources() {
     setLoading(true);
@@ -99,7 +136,7 @@ export default function ResourcesPage() {
     void loadResources();
   }, []);
 
-  const grouped = useMemo(() => {
+  const groupedBase = useMemo(() => {
     const map = new Map<number, ResourceRow[]>();
 
     for (const item of items) {
@@ -108,18 +145,51 @@ export default function ResourcesPage() {
       map.get(root)!.push(item);
     }
 
-    const groups = Array.from(map.values()).map((group) =>
-      [...group].sort((a, b) => (b.version || 1) - (a.version || 1))
-    );
+    return Array.from(map.entries()).map(([root, group]) => {
+      const versions = [...group].sort((a, b) => (b.version || 1) - (a.version || 1));
+      const latest = versions[0];
+      return {
+        root,
+        latest,
+        versions,
+        versionCount: versions.length,
+        latestDate: latest?.upload_date || "",
+        isPinned: pinnedRoots.includes(root),
+        isFavorite: favoriteRoots.includes(root),
+      };
+    });
+  }, [items, pinnedRoots, favoriteRoots]);
 
-    groups.sort((a, b) => {
-      const da = a[0]?.upload_date || "";
-      const db = b[0]?.upload_date || "";
-      return db.localeCompare(da);
+  const grouped = useMemo(() => {
+    const arr = [...groupedBase];
+
+    arr.sort((a, b) => {
+      if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+
+      switch (sortBy) {
+        case "oldest":
+          return a.latestDate.localeCompare(b.latestDate);
+        case "name-asc":
+          return String(a.latest?.filename || "").localeCompare(String(b.latest?.filename || ""));
+        case "name-desc":
+          return String(b.latest?.filename || "").localeCompare(String(a.latest?.filename || ""));
+        case "category":
+          return String(a.latest?.category || "Uncategorized").localeCompare(
+            String(b.latest?.category || "Uncategorized")
+          );
+        case "versions":
+          return b.versionCount - a.versionCount;
+        case "newest":
+        default:
+          return b.latestDate.localeCompare(a.latestDate);
+      }
     });
 
-    return groups;
-  }, [items]);
+    return arr;
+  }, [groupedBase, sortBy]);
+
+  const pinnedResources = useMemo(() => grouped.filter((g) => g.isPinned), [grouped]);
+  const favoriteResources = useMemo(() => grouped.filter((g) => g.isFavorite), [grouped]);
 
   const stats = useMemo(() => {
     const total = items.length;
@@ -128,9 +198,22 @@ export default function ResourcesPage() {
     const versions = items.filter((x) => Number(x.version || 1) > 1).length;
     const worksheets = items.filter((x) => x.filetype === "worksheet").length;
     const templates = items.filter((x) => x.filetype === "template").length;
+    const groupedCount = grouped.length;
+    const pinnedCount = pinnedResources.length;
+    const favoriteCount = favoriteResources.length;
 
-    return { total, categories, visibleAll, versions, worksheets, templates };
-  }, [items]);
+    return {
+      total,
+      categories,
+      visibleAll,
+      versions,
+      worksheets,
+      templates,
+      groupedCount,
+      pinnedCount,
+      favoriteCount,
+    };
+  }, [items, grouped.length, pinnedResources.length, favoriteResources.length]);
 
   const topCategories = useMemo(() => {
     const counts = new Map<string, number>();
@@ -152,6 +235,30 @@ export default function ResourcesPage() {
       .slice(0, 5);
   }, [items]);
 
+  const duplicateCandidates = useMemo(() => {
+    if (!uploadFile) return [];
+    const targetName = uploadFile.name.trim().toLowerCase();
+    if (!targetName) return [];
+
+    const seen = new Set<number>();
+    const matches: ResourceRow[] = [];
+
+    for (const group of groupedBase) {
+      const latest = group.latest;
+      if (!latest) continue;
+      const name = String(latest.filename || "").trim().toLowerCase();
+      if (name === targetName && !seen.has(group.root)) {
+        seen.add(group.root);
+        matches.push(latest);
+      }
+    }
+
+    return matches.slice(0, 3);
+  }, [uploadFile, groupedBase]);
+
+  const hasActiveFilters = Boolean(q.trim() || typeFilter || categoryFilter || visibilityFilter);
+  const activeFilterCount = [q.trim(), typeFilter, categoryFilter, visibilityFilter].filter(Boolean).length;
+
   function openUpload(prefill?: Partial<UploadForm>) {
     setUploadOpen(true);
     setForm({
@@ -165,6 +272,24 @@ export default function ResourcesPage() {
   function closeUpload() {
     if (busy) return;
     setUploadOpen(false);
+  }
+
+  function clearFilters() {
+    setQ("");
+    setTypeFilter("");
+    setCategoryFilter("");
+    setVisibilityFilter("");
+    setSortBy("newest");
+    setSuccess(null);
+    setErr(null);
+  }
+
+  function toggleFavorite(root: number) {
+    setFavoriteRoots((prev) => (prev.includes(root) ? prev.filter((x) => x !== root) : [...prev, root]));
+  }
+
+  function togglePinned(root: number) {
+    setPinnedRoots((prev) => (prev.includes(root) ? prev.filter((x) => x !== root) : [...prev, root]));
   }
 
   async function submitUpload() {
@@ -266,14 +391,15 @@ export default function ResourcesPage() {
             <div style={eyebrow}>Teacher & Admin Resource Hub</div>
             <h1 style={heroTitle}>Resources</h1>
             <p style={heroText}>
-              Centralize lesson notes, worksheets, policies, guides, templates, and school
-              materials so teachers and administrators can work faster and stay aligned.
+              Centralize lesson notes, worksheets, policies, guides, templates, and school materials
+              so teachers and administrators can work faster and stay aligned.
             </p>
 
             <div style={heroBadgeRow}>
               <HeroMiniBadge label="Teacher ready" value={`${stats.worksheets} worksheets`} />
               <HeroMiniBadge label="Admin ready" value={`${stats.templates} templates`} />
               <HeroMiniBadge label="Shared library" value={`${stats.visibleAll} public files`} />
+              <HeroMiniBadge label="Pinned" value={`${stats.pinnedCount} important`} />
             </div>
           </div>
 
@@ -289,7 +415,9 @@ export default function ResourcesPage() {
                 Upload Resource
               </button>
               <button
-                onClick={() => openUpload({ type: "worksheet", category: "Examination", visibility: "student" })}
+                onClick={() =>
+                  openUpload({ type: "worksheet", category: "Examination", visibility: "student" })
+                }
                 style={quickActionBtn}
                 disabled={busy}
               >
@@ -309,7 +437,7 @@ export default function ResourcesPage() {
         </section>
 
         <section style={statsGrid}>
-          <StatCard label="Total Files" value={String(stats.total)} accent="blue" />
+          <StatCard label="Latest Files" value={String(stats.groupedCount)} accent="blue" />
           <StatCard label="Categories" value={String(stats.categories)} accent="purple" />
           <StatCard label="Visible To All" value={String(stats.visibleAll)} accent="green" />
           <StatCard label="Versioned Files" value={String(stats.versions)} accent="amber" />
@@ -329,13 +457,22 @@ export default function ResourcesPage() {
             ) : (
               <div style={{ display: "grid", gap: 10 }}>
                 {topCategories.map((cat) => (
-                  <div key={cat.name} style={categoryRow}>
-                    <div>
-                      <div style={categoryName}>{cat.name}</div>
-                      <div style={categoryMeta}>Available in the shared library</div>
+                  <button
+                    key={cat.name}
+                    style={categoryRowButton}
+                    onClick={() => {
+                      setCategoryFilter(cat.name);
+                      void loadResources();
+                    }}
+                  >
+                    <div style={categoryRow}>
+                      <div>
+                        <div style={categoryName}>{cat.name}</div>
+                        <div style={categoryMeta}>Available in the shared library</div>
+                      </div>
+                      <div style={categoryCount}>{cat.count}</div>
                     </div>
-                    <div style={categoryCount}>{cat.count}</div>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
@@ -372,9 +509,77 @@ export default function ResourcesPage() {
           </div>
         </section>
 
+        {pinnedResources.length > 0 && (
+          <section style={featuredSection}>
+            <div style={sectionTitleRow}>
+              <div>
+                <div style={shortcutTitle}>Pinned Resources</div>
+                <div style={shortcutSub}>Important school files kept at the top for everyone.</div>
+              </div>
+            </div>
+
+            <div style={featuredGrid}>
+              {pinnedResources.slice(0, 4).map((group) => (
+                <FeaturedResourceCard
+                  key={group.root}
+                  resource={group.latest}
+                  root={group.root}
+                  versionCount={group.versionCount}
+                  isFavorite={group.isFavorite}
+                  onToggleFavorite={() => toggleFavorite(group.root)}
+                  onOpenDownload={() => undefined}
+                  downloadUrl={downloadUrl(group.latest.id)}
+                />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {favoriteResources.length > 0 && (
+          <section style={shortcutSection}>
+            <div style={sectionTitleRow}>
+              <div>
+                <div style={shortcutTitle}>My Favorites</div>
+                <div style={shortcutSub}>Quick access to the resources used most often.</div>
+              </div>
+            </div>
+
+            <div style={favoriteGrid}>
+              {favoriteResources.slice(0, 6).map((group) => (
+                <div key={group.root} style={favoriteCard}>
+                  <div style={favoriteTop}>
+                    <div style={favoriteIcon}>{iconForType(group.latest.filetype)}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={favoriteName}>{group.latest.filename}</div>
+                      <div style={favoriteMeta}>
+                        {group.latest.category || "Uncategorized"} • v{group.latest.version || 1}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={favoriteActions}>
+                    <a href={downloadUrl(group.latest.id)} style={miniLinkBtn}>
+                      Open
+                    </a>
+                    <button
+                      onClick={() => toggleFavorite(group.root)}
+                      style={miniGhostBtn}
+                      disabled={busy}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         <section style={shortcutSection}>
           <div style={shortcutTitle}>Quick Category Upload</div>
-          <div style={shortcutSub}>Jump straight into the type of resource teachers and admins add most often.</div>
+          <div style={shortcutSub}>
+            Jump straight into the type of resource teachers and admins add most often.
+          </div>
 
           <div style={shortcutGrid}>
             {QUICK_CATEGORIES.map((cat) => (
@@ -410,10 +615,17 @@ export default function ResourcesPage() {
 
         <section style={panel}>
           <div style={panelHeader}>
-            <div>
-              <div style={panelTitle}>Resource Library</div>
-              <div style={panelSub}>
-                Search, filter, download, version, and manage school resources from one place.
+            <div style={panelHeaderTop}>
+              <div>
+                <div style={panelTitle}>Resource Library</div>
+                <div style={panelSub}>
+                  Search, filter, sort, download, version, pin, and manage school resources from one place.
+                </div>
+              </div>
+
+              <div style={resultsPill}>
+                {stats.groupedCount} {stats.groupedCount === 1 ? "resource" : "resources"} found
+                {hasActiveFilters ? ` • ${activeFilterCount} filter${activeFilterCount > 1 ? "s" : ""} active` : ""}
               </div>
             </div>
           </div>
@@ -455,32 +667,93 @@ export default function ResourcesPage() {
               ))}
             </select>
 
-            <button onClick={() => void loadResources()} style={btnSecondary} disabled={loading || busy}>
-              Apply
-            </button>
+            <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortValue)} style={fieldInput}>
+              <option value="newest">Sort: Newest</option>
+              <option value="oldest">Sort: Oldest</option>
+              <option value="name-asc">Sort: Name A–Z</option>
+              <option value="name-desc">Sort: Name Z–A</option>
+              <option value="category">Sort: Category</option>
+              <option value="versions">Sort: Most Versions</option>
+            </select>
+
+            <div style={toolbarActions}>
+              <button onClick={() => void loadResources()} style={btnSecondary} disabled={loading || busy}>
+                Apply
+              </button>
+              <button onClick={clearFilters} style={btnSecondary} disabled={busy}>
+                Clear
+              </button>
+            </div>
           </div>
+
+          {hasActiveFilters && (
+            <div style={chipWrap}>
+              {q.trim() ? (
+                <FilterChip label={`Search: ${q.trim()}`} onRemove={() => setQ("")} />
+              ) : null}
+              {typeFilter ? <FilterChip label={`Type: ${titleize(typeFilter)}`} onRemove={() => setTypeFilter("")} /> : null}
+              {categoryFilter ? (
+                <FilterChip label={`Category: ${categoryFilter}`} onRemove={() => setCategoryFilter("")} />
+              ) : null}
+              {visibilityFilter ? (
+                <FilterChip
+                  label={`Visibility: ${titleize(visibilityFilter)}`}
+                  onRemove={() => setVisibilityFilter("")}
+                />
+              ) : null}
+            </div>
+          )}
 
           {loading ? (
             <div style={emptyState}>Loading resources...</div>
           ) : grouped.length === 0 ? (
-            <div style={emptyState}>No resources found.</div>
+            <div style={libraryEmptyWrap}>
+              <div style={libraryEmptyIcon}>📚</div>
+              <div style={libraryEmptyTitle}>No resources found</div>
+              <div style={libraryEmptyText}>
+                Try adjusting your filters, clearing the search, or uploading a new resource for teachers and admin.
+              </div>
+
+              <div style={libraryEmptyActions}>
+                <button onClick={clearFilters} style={btnSecondary}>
+                  Clear Filters
+                </button>
+                <button onClick={() => openUpload()} style={btnPrimary}>
+                  Upload Resource
+                </button>
+                <button
+                  onClick={() =>
+                    openUpload({ type: "worksheet", category: "Examination", visibility: "student" })
+                  }
+                  style={btnSecondary}
+                >
+                  Add Worksheet
+                </button>
+              </div>
+            </div>
           ) : (
             <div style={{ padding: 16, display: "grid", gap: 14 }}>
-              {grouped.map((versions) => {
-                const latest = versions[0];
-                const hasMoreVersions = versions.length > 1;
+              {grouped.map((group) => {
+                const latest = group.latest;
+                const hasMoreVersions = group.versions.length > 1;
 
                 return (
-                  <article key={latest.root_id || latest.id} style={resourceCard}>
+                  <article key={group.root} style={resourceCard}>
                     <div style={resourceTop}>
                       <div style={{ flex: 1 }}>
                         <div style={titleRow}>
                           <div style={fileIcon}>{iconForType(latest.filetype)}</div>
                           <div style={{ minWidth: 0 }}>
-                            <div style={resourceTitle}>{latest.filename}</div>
+                            <div style={resourceTitleRow}>
+                              <div style={resourceTitle}>{latest.filename}</div>
+                              {group.isPinned && <span style={pinnedPill}>Pinned</span>}
+                              {group.isFavorite && <span style={favoritePill}>Favorite</span>}
+                            </div>
+
                             <div style={resourceMeta}>
                               Uploaded {formatDateTime(latest.upload_date)}
                               {latest.uploader ? ` • by ${latest.uploader}` : ""}
+                              {group.versionCount > 1 ? ` • ${group.versionCount} versions` : ""}
                             </div>
                           </div>
                         </div>
@@ -488,12 +761,18 @@ export default function ResourcesPage() {
                         <div style={badgeRow}>
                           <Badge text={`TYPE: ${String(latest.filetype || "file").toUpperCase()}`} />
                           <Badge text={`CATEGORY: ${String(latest.category || "uncategorized").toUpperCase()}`} subtle />
-                          <Badge text={`VISIBILITY: ${String(latest.visibility || "all").toUpperCase()}`} subtle />
+                          <VisibilityBadge visibility={latest.visibility || "all"} />
                           <Badge text={`VERSION ${latest.version || 1}`} />
                         </div>
                       </div>
 
                       <div style={actionWrap}>
+                        <button onClick={() => togglePinned(group.root)} style={btnSecondary} disabled={busy}>
+                          {group.isPinned ? "Unpin" : "Pin"}
+                        </button>
+                        <button onClick={() => toggleFavorite(group.root)} style={btnSecondary} disabled={busy}>
+                          {group.isFavorite ? "Unfavorite" : "Favorite"}
+                        </button>
                         <a href={downloadUrl(latest.id)} style={linkBtn}>
                           Download
                         </a>
@@ -510,7 +789,7 @@ export default function ResourcesPage() {
                       <div style={versionSection}>
                         <div style={versionTitle}>Version History</div>
                         <div style={versionList}>
-                          {versions.map((v) => (
+                          {group.versions.map((v) => (
                             <div key={v.id} style={versionRow}>
                               <div>
                                 <div style={versionName}>
@@ -560,6 +839,39 @@ export default function ResourcesPage() {
                 teachers and admins can find files faster.
               </div>
             </div>
+
+            {duplicateCandidates.length > 0 && (
+              <div style={duplicateCard}>
+                <div style={duplicateTitle}>Possible duplicate detected</div>
+                <div style={duplicateText}>
+                  A file with the same name already exists. You can still upload as a new file, or open one of these
+                  and upload a new version instead.
+                </div>
+
+                <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+                  {duplicateCandidates.map((item) => (
+                    <div key={item.id} style={duplicateRow}>
+                      <div>
+                        <div style={duplicateName}>{item.filename}</div>
+                        <div style={duplicateMeta}>
+                          {item.category || "Uncategorized"} • v{item.version || 1} • {formatDateTime(item.upload_date)}
+                        </div>
+                      </div>
+                      <button
+                        style={btnSecondary}
+                        onClick={() => {
+                          setUploadOpen(false);
+                          startNewVersion(item);
+                        }}
+                        disabled={busy}
+                      >
+                        Upload New Version
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div style={formGrid}>
               <Field label="Choose File" full>
@@ -716,11 +1028,114 @@ function Badge({ text, subtle }: { text: string; subtle?: boolean }) {
   );
 }
 
+function VisibilityBadge({ visibility }: { visibility: string }) {
+  const v = String(visibility || "all").toLowerCase();
+
+  const colorMap: Record<string, { bg: string; border: string; color: string }> = {
+    all: {
+      bg: "rgba(34,197,94,0.16)",
+      border: "1px solid rgba(34,197,94,0.28)",
+      color: "#bbf7d0",
+    },
+    teacher: {
+      bg: "rgba(96,165,250,0.16)",
+      border: "1px solid rgba(96,165,250,0.28)",
+      color: "#dbeafe",
+    },
+    student: {
+      bg: "rgba(245,158,11,0.16)",
+      border: "1px solid rgba(245,158,11,0.28)",
+      color: "#fde68a",
+    },
+    parent: {
+      bg: "rgba(168,85,247,0.16)",
+      border: "1px solid rgba(168,85,247,0.28)",
+      color: "#e9d5ff",
+    },
+  };
+
+  const styles = colorMap[v] || colorMap.all;
+
+  return (
+    <span
+      style={{
+        fontSize: 11,
+        fontWeight: 900,
+        letterSpacing: 0.6,
+        padding: "6px 9px",
+        borderRadius: 999,
+        border: styles.border,
+        background: styles.bg,
+        color: styles.color,
+      }}
+    >
+      VISIBILITY: {v.toUpperCase()}
+    </span>
+  );
+}
+
 function HeroMiniBadge({ label, value }: { label: string; value: string }) {
   return (
     <div style={heroMiniBadge}>
       <div style={heroMiniLabel}>{label}</div>
       <div style={heroMiniValue}>{value}</div>
+    </div>
+  );
+}
+
+function FilterChip({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return (
+    <div style={filterChip}>
+      <span>{label}</span>
+      <button style={filterChipBtn} onClick={onRemove}>
+        ✕
+      </button>
+    </div>
+  );
+}
+
+function FeaturedResourceCard({
+  resource,
+  root,
+  versionCount,
+  isFavorite,
+  onToggleFavorite,
+  onOpenDownload,
+  downloadUrl,
+}: {
+  resource: ResourceRow;
+  root: number;
+  versionCount: number;
+  isFavorite: boolean;
+  onToggleFavorite: () => void;
+  onOpenDownload: () => void;
+  downloadUrl: string;
+}) {
+  void root;
+  void onOpenDownload;
+
+  return (
+    <div style={featuredCard}>
+      <div style={featuredIcon}>{iconForType(resource.filetype)}</div>
+      <div style={featuredName}>{resource.filename}</div>
+      <div style={featuredMeta}>
+        {resource.category || "Uncategorized"} • {titleize(resource.visibility || "all")} • {versionCount}{" "}
+        {versionCount === 1 ? "version" : "versions"}
+      </div>
+
+      <div style={featuredBadgeRow}>
+        <span style={featuredPill}>Pinned</span>
+        {isFavorite ? <span style={featuredPillMuted}>Favorite</span> : null}
+      </div>
+
+      <div style={featuredActions}>
+        <a href={downloadUrl} style={miniLightBtn}>
+          Open
+        </a>
+        <button onClick={onToggleFavorite} style={miniGhostBtn}>
+          {isFavorite ? "Unfavorite" : "Favorite"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -751,6 +1166,16 @@ function iconForType(type: string) {
   if (t.includes("template")) return "📋";
   if (t.includes("lesson")) return "📚";
   return "📁";
+}
+
+function safeParseNumberArray(value: string) {
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((x) => Number(x)).filter((x) => Number.isFinite(x));
+  } catch {
+    return [];
+  }
 }
 
 function extractErr(e: unknown, fallback: string) {
@@ -953,6 +1378,14 @@ const insightSub: CSSProperties = {
   color: "#94a3b8",
 };
 
+const categoryRowButton: CSSProperties = {
+  border: "none",
+  background: "transparent",
+  padding: 0,
+  cursor: "pointer",
+  textAlign: "left",
+};
+
 const categoryRow: CSSProperties = {
   display: "flex",
   justifyContent: "space-between",
@@ -1023,6 +1456,144 @@ const recentMeta: CSSProperties = {
   color: "#94a3b8",
 };
 
+const featuredSection: CSSProperties = {
+  marginBottom: 18,
+};
+
+const sectionTitleRow: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 12,
+  marginBottom: 12,
+};
+
+const featuredGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+  gap: 12,
+};
+
+const featuredCard: CSSProperties = {
+  borderRadius: 18,
+  padding: 16,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "linear-gradient(180deg, rgba(30,41,59,0.92) 0%, rgba(15,23,42,0.92) 100%)",
+  boxShadow: "0 10px 30px rgba(0,0,0,0.18)",
+};
+
+const featuredIcon: CSSProperties = {
+  width: 48,
+  height: 48,
+  borderRadius: 14,
+  display: "grid",
+  placeItems: "center",
+  background: "rgba(250,204,21,0.14)",
+  border: "1px solid rgba(250,204,21,0.24)",
+  fontSize: 22,
+  marginBottom: 12,
+};
+
+const featuredName: CSSProperties = {
+  fontSize: 16,
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const featuredMeta: CSSProperties = {
+  marginTop: 8,
+  fontSize: 13,
+  color: "#cbd5e1",
+  lineHeight: 1.5,
+};
+
+const featuredBadgeRow: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  flexWrap: "wrap",
+  marginTop: 12,
+};
+
+const featuredPill: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 900,
+  letterSpacing: 0.5,
+  padding: "6px 9px",
+  borderRadius: 999,
+  background: "rgba(250,204,21,0.16)",
+  color: "#fde68a",
+  border: "1px solid rgba(250,204,21,0.25)",
+};
+
+const featuredPillMuted: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 900,
+  letterSpacing: 0.5,
+  padding: "6px 9px",
+  borderRadius: 999,
+  background: "rgba(255,255,255,0.06)",
+  color: "#e2e8f0",
+  border: "1px solid rgba(255,255,255,0.12)",
+};
+
+const featuredActions: CSSProperties = {
+  display: "flex",
+  gap: 10,
+  marginTop: 14,
+  flexWrap: "wrap",
+};
+
+const favoriteGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+  gap: 12,
+  marginTop: 14,
+};
+
+const favoriteCard: CSSProperties = {
+  padding: 14,
+  borderRadius: 16,
+  border: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(255,255,255,0.04)",
+};
+
+const favoriteTop: CSSProperties = {
+  display: "flex",
+  gap: 12,
+  alignItems: "center",
+};
+
+const favoriteIcon: CSSProperties = {
+  width: 42,
+  height: 42,
+  borderRadius: 12,
+  display: "grid",
+  placeItems: "center",
+  background: "rgba(236,72,153,0.12)",
+  border: "1px solid rgba(236,72,153,0.22)",
+  fontSize: 18,
+  flexShrink: 0,
+};
+
+const favoriteName: CSSProperties = {
+  fontSize: 14,
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const favoriteMeta: CSSProperties = {
+  marginTop: 4,
+  fontSize: 12,
+  color: "#94a3b8",
+};
+
+const favoriteActions: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  marginTop: 12,
+  flexWrap: "wrap",
+};
+
 const shortcutSection: CSSProperties = {
   marginBottom: 18,
   borderRadius: 18,
@@ -1074,6 +1645,14 @@ const panelHeader: CSSProperties = {
   borderBottom: "1px solid rgba(255,255,255,0.08)",
 };
 
+const panelHeaderTop: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "flex-start",
+  flexWrap: "wrap",
+};
+
 const panelTitle: CSSProperties = {
   fontSize: 18,
   fontWeight: 900,
@@ -1085,12 +1664,59 @@ const panelSub: CSSProperties = {
   color: "#94a3b8",
 };
 
+const resultsPill: CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 999,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.05)",
+  color: "#e2e8f0",
+  fontSize: 12,
+  fontWeight: 800,
+};
+
 const toolbar: CSSProperties = {
   padding: 16,
   display: "grid",
-  gridTemplateColumns: "minmax(220px, 1.4fr) repeat(4, minmax(140px, 0.8fr))",
+  gridTemplateColumns: "minmax(220px, 1.4fr) repeat(5, minmax(140px, 0.8fr))",
   gap: 12,
   borderBottom: "1px solid rgba(255,255,255,0.08)",
+};
+
+const toolbarActions: CSSProperties = {
+  display: "flex",
+  gap: 10,
+  flexWrap: "wrap",
+};
+
+const chipWrap: CSSProperties = {
+  padding: "12px 16px 0 16px",
+  display: "flex",
+  gap: 8,
+  flexWrap: "wrap",
+};
+
+const filterChip: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "8px 10px",
+  borderRadius: 999,
+  border: "1px solid rgba(96,165,250,0.22)",
+  background: "rgba(96,165,250,0.12)",
+  color: "#dbeafe",
+  fontSize: 12,
+  fontWeight: 800,
+};
+
+const filterChipBtn: CSSProperties = {
+  width: 22,
+  height: 22,
+  borderRadius: 999,
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "rgba(255,255,255,0.08)",
+  color: "#fff",
+  cursor: "pointer",
+  fontWeight: 900,
 };
 
 const searchInput: CSSProperties = {
@@ -1123,6 +1749,46 @@ const emptyMini: CSSProperties = {
   color: "#cbd5e1",
 };
 
+const libraryEmptyWrap: CSSProperties = {
+  padding: "42px 22px",
+  display: "grid",
+  placeItems: "center",
+  textAlign: "center",
+};
+
+const libraryEmptyIcon: CSSProperties = {
+  width: 72,
+  height: 72,
+  borderRadius: 20,
+  display: "grid",
+  placeItems: "center",
+  background: "rgba(96,165,250,0.12)",
+  border: "1px solid rgba(96,165,250,0.18)",
+  fontSize: 32,
+};
+
+const libraryEmptyTitle: CSSProperties = {
+  marginTop: 16,
+  fontSize: 22,
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const libraryEmptyText: CSSProperties = {
+  marginTop: 8,
+  maxWidth: 620,
+  color: "#94a3b8",
+  lineHeight: 1.6,
+};
+
+const libraryEmptyActions: CSSProperties = {
+  display: "flex",
+  gap: 10,
+  flexWrap: "wrap",
+  justifyContent: "center",
+  marginTop: 18,
+};
+
 const resourceCard: CSSProperties = {
   borderRadius: 16,
   border: "1px solid rgba(255,255,255,0.08)",
@@ -1142,6 +1808,13 @@ const titleRow: CSSProperties = {
   display: "flex",
   gap: 12,
   alignItems: "center",
+};
+
+const resourceTitleRow: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  alignItems: "center",
+  flexWrap: "wrap",
 };
 
 const fileIcon: CSSProperties = {
@@ -1166,6 +1839,28 @@ const resourceMeta: CSSProperties = {
   marginTop: 5,
   fontSize: 13,
   color: "#94a3b8",
+};
+
+const pinnedPill: CSSProperties = {
+  fontSize: 10,
+  fontWeight: 900,
+  letterSpacing: 0.6,
+  padding: "5px 8px",
+  borderRadius: 999,
+  background: "rgba(250,204,21,0.16)",
+  color: "#fde68a",
+  border: "1px solid rgba(250,204,21,0.24)",
+};
+
+const favoritePill: CSSProperties = {
+  fontSize: 10,
+  fontWeight: 900,
+  letterSpacing: 0.6,
+  padding: "5px 8px",
+  borderRadius: 999,
+  background: "rgba(236,72,153,0.16)",
+  color: "#fbcfe8",
+  border: "1px solid rgba(236,72,153,0.24)",
 };
 
 const badgeRow: CSSProperties = {
@@ -1243,6 +1938,50 @@ const uploadTipText: CSSProperties = {
   fontSize: 13,
   color: "#cbd5e1",
   lineHeight: 1.5,
+};
+
+const duplicateCard: CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 14,
+  border: "1px solid rgba(245,158,11,0.22)",
+  background: "rgba(245,158,11,0.09)",
+  marginBottom: 14,
+};
+
+const duplicateTitle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 900,
+  color: "#fde68a",
+};
+
+const duplicateText: CSSProperties = {
+  marginTop: 6,
+  fontSize: 13,
+  color: "#e2e8f0",
+  lineHeight: 1.5,
+};
+
+const duplicateRow: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "center",
+  padding: "10px 12px",
+  borderRadius: 12,
+  background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.08)",
+};
+
+const duplicateName: CSSProperties = {
+  fontSize: 14,
+  fontWeight: 800,
+  color: "#fff",
+};
+
+const duplicateMeta: CSSProperties = {
+  marginTop: 4,
+  fontSize: 12,
+  color: "#cbd5e1",
 };
 
 const formGrid: CSSProperties = {
@@ -1368,6 +2107,26 @@ const miniLinkBtn: CSSProperties = {
   color: "#fff",
   fontWeight: 800,
   textDecoration: "none",
+};
+
+const miniLightBtn: CSSProperties = {
+  padding: "8px 12px",
+  borderRadius: 10,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "#ffffff",
+  color: "#0b1220",
+  fontWeight: 900,
+  textDecoration: "none",
+};
+
+const miniGhostBtn: CSSProperties = {
+  padding: "8px 12px",
+  borderRadius: 10,
+  border: "1px solid rgba(255,255,255,0.14)",
+  background: "rgba(255,255,255,0.04)",
+  color: "#fff",
+  fontWeight: 800,
+  cursor: "pointer",
 };
 
 const iconBtn: CSSProperties = {
