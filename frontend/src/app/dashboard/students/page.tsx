@@ -83,6 +83,8 @@ type StudentForm = {
   emergency_contact: string;
 };
 
+type ViewFilter = "all" | "strong" | "needs-support";
+
 const emptyForm: StudentForm = {
   name: "",
   dob: "",
@@ -115,6 +117,8 @@ export default function StudentsPage() {
 
   const [term, setTerm] = useState<string>("Term 1");
   const [search, setSearch] = useState("");
+  const [gradeFilter, setGradeFilter] = useState("");
+  const [viewFilter, setViewFilter] = useState<ViewFilter>("all");
 
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<StudentForm>(emptyForm);
@@ -198,26 +202,10 @@ export default function StudentsPage() {
     void loadStudentDetail(selectedId, term);
   }, [selectedId, term]);
 
-  const filteredStudents = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return students;
-
-    return students.filter((s) => {
-      return (
-        s.name?.toLowerCase().includes(q) ||
-        String(s.id).includes(q) ||
-        String(s.grade ?? "").includes(q) ||
-        (s.guardian_name || "").toLowerCase().includes(q) ||
-        (s.guardian_contact || "").toLowerCase().includes(q) ||
-        (s.email || "").toLowerCase().includes(q)
-      );
-    });
-  }, [students, search]);
-
-  const selectedStudent = useMemo(
-    () => students.find((s) => s.id === selectedId) || null,
-    [students, selectedId]
-  );
+  const gradeOptions = useMemo(() => {
+    const grades = Array.from(new Set(students.map((s) => Number(s.grade)).filter((g) => !Number.isNaN(g))));
+    return grades.sort((a, b) => a - b);
+  }, [students]);
 
   const attendanceSummary = useMemo(() => {
     const out = { present: 0, absent: 0, late: 0, excused: 0 };
@@ -240,13 +228,21 @@ export default function StudentsPage() {
     const avg = rows.length ? round1(total / rows.length) : 0;
     const best = rows.length ? Math.max(...rows.map((r) => r.total)) : 0;
     const weakest = rows.length ? Math.min(...rows.map((r) => r.total)) : 0;
+    const pass = rows.filter((r) => r.total >= 50).length;
+    const fail = rows.length - pass;
+    const topSubject = rows.length ? [...rows].sort((a, b) => b.total - a.total)[0] : null;
+    const lowSubject = rows.length ? [...rows].sort((a, b) => a.total - b.total)[0] : null;
 
     return {
       count: rows.length,
       avg,
       best,
       weakest,
+      pass,
+      fail,
       rows,
+      topSubject,
+      lowSubject,
     };
   }, [scores]);
 
@@ -264,8 +260,81 @@ export default function StudentsPage() {
         ) || 0,
       status: tuition?.status || "Not set",
       paymentCount: payments.length,
+      plan: tuition?.payment_plan || "--",
     };
   }, [tuition, payments]);
+
+  const recentActivity = useMemo(() => {
+    const scoreItems = scores.map((s) => ({
+      type: "score" as const,
+      title: `${s.subject} score recorded`,
+      value: `${Number(s.cont_ass_score || 0) + Number(s.exam_score || 0)}`,
+      date: s.date,
+    }));
+
+    const paymentItems = payments.map((p) => ({
+      type: "payment" as const,
+      title: `Payment received`,
+      value: `$${money(p.amount)}`,
+      date: p.timestamp || "",
+    }));
+
+    const attendanceItems = attendance.map((a) => ({
+      type: "attendance" as const,
+      title: `Attendance marked ${a.status}`,
+      value: a.note || a.status,
+      date: a.date,
+    }));
+
+    return [...scoreItems, ...paymentItems, ...attendanceItems]
+      .filter((x) => x.date)
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .slice(0, 8);
+  }, [scores, payments, attendance]);
+
+  const selectedStudent = useMemo(
+    () => students.find((s) => s.id === selectedId) || null,
+    [students, selectedId]
+  );
+
+  const filteredStudents = useMemo(() => {
+    const q = search.trim().toLowerCase();
+
+    return students.filter((s) => {
+      const matchesSearch =
+        !q ||
+        s.name?.toLowerCase().includes(q) ||
+        String(s.id).includes(q) ||
+        String(s.grade ?? "").includes(q) ||
+        (s.guardian_name || "").toLowerCase().includes(q) ||
+        (s.guardian_contact || "").toLowerCase().includes(q) ||
+        (s.email || "").toLowerCase().includes(q);
+
+      const matchesGrade = !gradeFilter || String(s.grade) === gradeFilter;
+
+      return matchesSearch && matchesGrade;
+    });
+  }, [students, search, gradeFilter]);
+
+  const studentInsights = useMemo(() => {
+    const total = students.length;
+    const withGuardian = students.filter((s) => Boolean(s.guardian_name || s.guardian_contact)).length;
+    const withEmail = students.filter((s) => Boolean(s.email)).length;
+    const avgGrade = total
+      ? round1(students.reduce((sum, s) => sum + Number(s.grade || 0), 0) / total)
+      : 0;
+
+    return { total, withGuardian, withEmail, avgGrade };
+  }, [students]);
+
+  const directoryRows = useMemo(() => {
+    return filteredStudents.filter((student) => {
+      if (viewFilter === "all") return true;
+      if (viewFilter === "strong") return student.grade >= 6;
+      if (viewFilter === "needs-support") return student.grade <= 3;
+      return true;
+    });
+  }, [filteredStudents, viewFilter]);
 
   function openCreate() {
     setForm(emptyForm);
@@ -345,15 +414,24 @@ export default function StudentsPage() {
 
   return (
     <div style={pageShell}>
+      <div style={bgGlowOne} />
+      <div style={bgGlowTwo} />
+
       <div style={page}>
         <section style={hero}>
           <div>
             <div style={eyebrow}>Student Intelligence Hub</div>
             <h1 style={heroTitle}>Students</h1>
             <p style={heroText}>
-              View each student’s profile, attendance, finance records, and academic
-              performance from one place.
+              View each student’s profile, attendance, finance records, academic performance,
+              and recent activity from one premium command center.
             </p>
+
+            <div style={heroMiniRow}>
+              <HeroMiniBadge label="Students" value={String(studentInsights.total)} />
+              <HeroMiniBadge label="With Guardians" value={String(studentInsights.withGuardian)} />
+              <HeroMiniBadge label="Avg Grade" value={String(studentInsights.avgGrade)} />
+            </div>
           </div>
 
           <div style={heroActions}>
@@ -366,7 +444,7 @@ export default function StudentsPage() {
           </div>
         </section>
 
-        <section style={topStatsGrid}>
+        <section style={premiumStatsGrid}>
           <StatCard label="Students" value={String(students.length)} accent="blue" />
           <StatCard label="Selected Term" value={term} accent="purple" />
           <StatCard
@@ -379,6 +457,35 @@ export default function StudentsPage() {
             value={selectedStudent ? String(scores.length) : "--"}
             accent="amber"
           />
+        </section>
+
+        <section style={premiumInsightsGrid}>
+          <div style={premiumInsightCard}>
+            <div style={premiumInsightTitle}>Directory Insights</div>
+            <div style={premiumInsightSub}>A quick snapshot of the student population.</div>
+
+            <div style={insightMetricGrid}>
+              <InsightMetric label="With Email" value={String(studentInsights.withEmail)} />
+              <InsightMetric label="Guardian Records" value={String(studentInsights.withGuardian)} />
+              <InsightMetric label="Grades Listed" value={String(gradeOptions.length)} />
+              <InsightMetric label="Current Selection" value={selectedStudent ? "Loaded" : "None"} />
+            </div>
+          </div>
+
+          <div style={premiumInsightCard}>
+            <div style={premiumInsightTitle}>Student Focus</div>
+            <div style={premiumInsightSub}>Use quick filters to review different groups fast.</div>
+
+            <div style={chipWrap}>
+              <FilterChip active={viewFilter === "all"} onClick={() => setViewFilter("all")} label="All" />
+              <FilterChip active={viewFilter === "strong"} onClick={() => setViewFilter("strong")} label="Upper Grades" />
+              <FilterChip
+                active={viewFilter === "needs-support"}
+                onClick={() => setViewFilter("needs-support")}
+                label="Lower Grades"
+              />
+            </div>
+          </div>
         </section>
 
         {err && (
@@ -411,15 +518,28 @@ export default function StudentsPage() {
                 placeholder="Search student, ID, guardian, grade..."
                 style={searchInput}
               />
+
+              <select
+                value={gradeFilter}
+                onChange={(e) => setGradeFilter(e.target.value)}
+                style={fieldInput}
+              >
+                <option value="">All grades</option>
+                {gradeOptions.map((grade) => (
+                  <option key={grade} value={String(grade)}>
+                    Grade {grade}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div style={listWrap}>
               {loading ? (
                 <div style={emptyState}>Loading students...</div>
-              ) : filteredStudents.length === 0 ? (
+              ) : directoryRows.length === 0 ? (
                 <div style={emptyState}>No students found.</div>
               ) : (
-                filteredStudents.map((student) => {
+                directoryRows.map((student) => {
                   const active = selectedId === student.id;
 
                   return (
@@ -445,8 +565,8 @@ export default function StudentsPage() {
                           ID #{student.id} • Grade {student.grade}
                         </div>
                         <div style={studentMeta}>
-                          {student.guardian_name || "No guardian"}{" "}
-                          {student.guardian_contact ? `• ${student.guardian_contact}` : ""}
+                          {student.guardian_name || "No guardian"}
+                          {student.guardian_contact ? ` • ${student.guardian_contact}` : ""}
                         </div>
                       </div>
                     </button>
@@ -545,6 +665,8 @@ export default function StudentsPage() {
                       <InfoItem label="Total Paid" value={`$${money(financeSummary.totalPaid)}`} />
                       <InfoItem label="Balance" value={`$${money(financeSummary.balance)}`} />
                       <InfoItem label="Status" value={financeSummary.status} />
+                      <InfoItem label="Payment Plan" value={financeSummary.plan} />
+                      <InfoItem label="Payments" value={String(financeSummary.paymentCount)} />
                     </InfoGrid>
 
                     <div style={miniSectionTitle}>Payment History</div>
@@ -584,28 +706,37 @@ export default function StudentsPage() {
                     ) : attendance.length === 0 ? (
                       <div style={emptyInline}>No attendance records found.</div>
                     ) : (
-                      <div style={tableWrap}>
-                        <table style={table}>
-                          <thead>
-                            <tr>
-                              <th style={th}>Date</th>
-                              <th style={th}>Status</th>
-                              <th style={th}>Note</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {attendance.slice(0, 12).map((row) => (
-                              <tr key={row.id}>
-                                <td style={td}>{row.date}</td>
-                                <td style={td}>
-                                  <span style={statusPill(row.status)}>{row.status}</span>
-                                </td>
-                                <td style={td}>{row.note || "--"}</td>
+                      <>
+                        <InfoGrid>
+                          <InfoItem label="Present" value={String(attendanceSummary.present)} />
+                          <InfoItem label="Absent" value={String(attendanceSummary.absent)} />
+                          <InfoItem label="Late" value={String(attendanceSummary.late)} />
+                          <InfoItem label="Excused" value={String(attendanceSummary.excused)} />
+                        </InfoGrid>
+
+                        <div style={tableWrap}>
+                          <table style={table}>
+                            <thead>
+                              <tr>
+                                <th style={th}>Date</th>
+                                <th style={th}>Status</th>
+                                <th style={th}>Note</th>
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
+                            </thead>
+                            <tbody>
+                              {attendance.slice(0, 12).map((row) => (
+                                <tr key={row.id}>
+                                  <td style={td}>{row.date}</td>
+                                  <td style={td}>
+                                    <span style={statusPill(row.status)}>{row.status}</span>
+                                  </td>
+                                  <td style={td}>{row.note || "--"}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </>
                     )}
                   </Card>
 
@@ -621,7 +752,27 @@ export default function StudentsPage() {
                           <InfoItem label="Average" value={String(scoreSummary.avg)} />
                           <InfoItem label="Best Score" value={String(scoreSummary.best)} />
                           <InfoItem label="Lowest Score" value={String(scoreSummary.weakest)} />
+                          <InfoItem label="Passed" value={String(scoreSummary.pass)} />
+                          <InfoItem label="Needs Support" value={String(scoreSummary.fail)} />
                         </InfoGrid>
+
+                        <div style={miniInsightRow}>
+                          <div style={miniInsightCard}>
+                            <div style={miniInsightLabel}>Top Subject</div>
+                            <div style={miniInsightValue}>
+                              {scoreSummary.topSubject?.subject || "--"}{" "}
+                              {scoreSummary.topSubject ? `• ${scoreSummary.topSubject.total}` : ""}
+                            </div>
+                          </div>
+
+                          <div style={miniInsightCard}>
+                            <div style={miniInsightLabel}>Weakest Subject</div>
+                            <div style={miniInsightValue}>
+                              {scoreSummary.lowSubject?.subject || "--"}{" "}
+                              {scoreSummary.lowSubject ? `• ${scoreSummary.lowSubject.total}` : ""}
+                            </div>
+                          </div>
+                        </div>
 
                         <div style={tableWrap}>
                           <table style={table}>
@@ -656,6 +807,26 @@ export default function StudentsPage() {
                     )}
                   </Card>
                 </div>
+
+                <Card title="Recent Activity" subtitle="Latest attendance, score, and finance events">
+                  {recentActivity.length === 0 ? (
+                    <div style={emptyInline}>No recent activity found.</div>
+                  ) : (
+                    <div style={activityFeed}>
+                      {recentActivity.map((item, idx) => (
+                        <div key={`${item.type}-${item.date}-${idx}`} style={activityRow}>
+                          <div style={activityDot(item.type)} />
+                          <div style={{ flex: 1 }}>
+                            <div style={activityTitle}>{item.title}</div>
+                            <div style={activityMeta}>
+                              {item.value} • {formatDateTime(item.date)}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Card>
               </>
             )}
           </section>
@@ -664,6 +835,13 @@ export default function StudentsPage() {
         {open && (
           <Modal title="Add New Student" onClose={closeCreate}>
             {formError && <div style={{ ...errorAlert, marginBottom: 12 }}>{formError}</div>}
+
+            <div style={createIntroCard}>
+              <div style={createIntroTitle}>Student Registration</div>
+              <div style={createIntroText}>
+                Add the student’s core identity, guardian details, and emergency information so all school records stay linked from day one.
+              </div>
+            </div>
 
             <div style={formGrid}>
               <Field label="Student Name" full>
@@ -883,6 +1061,51 @@ function StatCard({
   );
 }
 
+function HeroMiniBadge({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={heroMiniBadge}>
+      <div style={heroMiniLabel}>{label}</div>
+      <div style={heroMiniValue}>{value}</div>
+    </div>
+  );
+}
+
+function InsightMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={insightMetricCard}>
+      <div style={insightMetricLabel}>{label}</div>
+      <div style={insightMetricValue}>{value}</div>
+    </div>
+  );
+}
+
+function FilterChip({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: "10px 12px",
+        borderRadius: 999,
+        border: "1px solid rgba(255,255,255,0.14)",
+        background: active ? "#ffffff" : "rgba(255,255,255,0.06)",
+        color: active ? "#0b1220" : "#f8fafc",
+        fontWeight: 900,
+        cursor: "pointer",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
 function initials(name: string) {
   return String(name || "")
     .split(" ")
@@ -959,16 +1182,58 @@ function statusPill(status: string): CSSProperties {
   };
 }
 
+function activityDot(type: "score" | "payment" | "attendance"): CSSProperties {
+  const map: Record<string, CSSProperties> = {
+    score: { background: "rgba(59,130,246,0.9)" },
+    payment: { background: "rgba(34,197,94,0.9)" },
+    attendance: { background: "rgba(245,158,11,0.9)" },
+  };
+
+  return {
+    width: 12,
+    height: 12,
+    borderRadius: 999,
+    flexShrink: 0,
+    ...(map[type] || { background: "rgba(148,163,184,0.9)" }),
+  };
+}
+
 const pageShell: CSSProperties = {
   minHeight: "100vh",
   background: "linear-gradient(180deg, #0f172a 0%, #111827 45%, #0b1220 100%)",
   color: "#f8fafc",
   padding: 24,
+  position: "relative",
+  overflow: "hidden",
+};
+
+const bgGlowOne: CSSProperties = {
+  position: "absolute",
+  top: -120,
+  right: -100,
+  width: 320,
+  height: 320,
+  borderRadius: "50%",
+  background: "radial-gradient(circle, rgba(59,130,246,0.22), transparent 70%)",
+  pointerEvents: "none",
+};
+
+const bgGlowTwo: CSSProperties = {
+  position: "absolute",
+  bottom: -160,
+  left: -120,
+  width: 360,
+  height: 360,
+  borderRadius: "50%",
+  background: "radial-gradient(circle, rgba(168,85,247,0.16), transparent 70%)",
+  pointerEvents: "none",
 };
 
 const page: CSSProperties = {
   maxWidth: 1450,
   margin: "0 auto",
+  position: "relative",
+  zIndex: 1,
 };
 
 const hero: CSSProperties = {
@@ -1002,17 +1267,107 @@ const heroText: CSSProperties = {
   lineHeight: 1.6,
 };
 
+const heroMiniRow: CSSProperties = {
+  display: "flex",
+  gap: 10,
+  flexWrap: "wrap",
+  marginTop: 16,
+};
+
+const heroMiniBadge: CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.05)",
+};
+
+const heroMiniLabel: CSSProperties = {
+  fontSize: 11,
+  color: "#94a3b8",
+  fontWeight: 800,
+  textTransform: "uppercase",
+  letterSpacing: 0.6,
+};
+
+const heroMiniValue: CSSProperties = {
+  fontSize: 14,
+  color: "#fff",
+  fontWeight: 900,
+  marginTop: 4,
+};
+
 const heroActions: CSSProperties = {
   display: "flex",
   gap: 10,
   flexWrap: "wrap",
 };
 
-const topStatsGrid: CSSProperties = {
+const premiumStatsGrid: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
   gap: 12,
   marginBottom: 18,
+};
+
+const premiumInsightsGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 16,
+  marginBottom: 18,
+};
+
+const premiumInsightCard: CSSProperties = {
+  borderRadius: 18,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(15,23,42,0.72)",
+  backdropFilter: "blur(10px)",
+  padding: 16,
+};
+
+const premiumInsightTitle: CSSProperties = {
+  fontSize: 17,
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const premiumInsightSub: CSSProperties = {
+  marginTop: 4,
+  fontSize: 13,
+  color: "#94a3b8",
+};
+
+const insightMetricGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(140px, 1fr))",
+  gap: 12,
+  marginTop: 14,
+};
+
+const insightMetricCard: CSSProperties = {
+  borderRadius: 14,
+  background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.08)",
+  padding: 14,
+};
+
+const insightMetricLabel: CSSProperties = {
+  fontSize: 12,
+  color: "#94a3b8",
+  fontWeight: 800,
+};
+
+const insightMetricValue: CSSProperties = {
+  marginTop: 8,
+  fontSize: 22,
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const chipWrap: CSSProperties = {
+  display: "flex",
+  gap: 10,
+  flexWrap: "wrap",
+  marginTop: 14,
 };
 
 const layout: CSSProperties = {
@@ -1068,6 +1423,8 @@ const panelBody: CSSProperties = {
 const toolbar: CSSProperties = {
   padding: 12,
   borderBottom: "1px solid rgba(255,255,255,0.08)",
+  display: "grid",
+  gap: 10,
 };
 
 const searchInput: CSSProperties = {
@@ -1237,6 +1594,33 @@ const miniSectionTitle: CSSProperties = {
   color: "#e2e8f0",
 };
 
+const miniInsightRow: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 12,
+  marginTop: 14,
+};
+
+const miniInsightCard: CSSProperties = {
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(255,255,255,0.04)",
+  padding: 12,
+};
+
+const miniInsightLabel: CSSProperties = {
+  fontSize: 12,
+  color: "#94a3b8",
+  fontWeight: 800,
+  textTransform: "uppercase",
+};
+
+const miniInsightValue: CSSProperties = {
+  marginTop: 8,
+  color: "#fff",
+  fontWeight: 900,
+};
+
 const tableWrap: CSSProperties = {
   overflowX: "auto",
   marginTop: 12,
@@ -1316,6 +1700,27 @@ const formGrid: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "1fr 1fr",
   gap: 14,
+};
+
+const createIntroCard: CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 14,
+  border: "1px solid rgba(96,165,250,0.18)",
+  background: "rgba(96,165,250,0.08)",
+  marginBottom: 14,
+};
+
+const createIntroTitle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 900,
+  color: "#dbeafe",
+  marginBottom: 6,
+};
+
+const createIntroText: CSSProperties = {
+  fontSize: 13,
+  color: "#cbd5e1",
+  lineHeight: 1.5,
 };
 
 const modalActions: CSSProperties = {
@@ -1416,4 +1821,30 @@ const successAlert: CSSProperties = {
   border: "1px solid rgba(34,197,94,0.22)",
   background: "rgba(20,83,45,0.24)",
   color: "#bbf7d0",
+};
+
+const activityFeed: CSSProperties = {
+  display: "grid",
+  gap: 12,
+};
+
+const activityRow: CSSProperties = {
+  display: "flex",
+  alignItems: "flex-start",
+  gap: 12,
+  padding: "12px 14px",
+  borderRadius: 14,
+  background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.08)",
+};
+
+const activityTitle: CSSProperties = {
+  fontWeight: 800,
+  color: "#fff",
+};
+
+const activityMeta: CSSProperties = {
+  marginTop: 4,
+  fontSize: 13,
+  color: "#94a3b8",
 };
