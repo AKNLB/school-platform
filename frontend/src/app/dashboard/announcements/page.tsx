@@ -360,7 +360,9 @@ export default function AnnouncementsPage() {
               <h3 style={announcementTitle}>{a.title}</h3>
               {a.pinned && <Badge text="PINNED" />}
               <AudienceBadge audience={a.audience} />
-              {attachmentCount > 0 ? <Badge text={`${attachmentCount} ATTACHMENT${attachmentCount > 1 ? "S" : ""}`} subtle /> : null}
+              {attachmentCount > 0 ? (
+                <Badge text={`${attachmentCount} ATTACHMENT${attachmentCount > 1 ? "S" : ""}`} subtle />
+              ) : null}
             </div>
 
             <div style={announcementBody}>{a.description}</div>
@@ -468,7 +470,7 @@ export default function AnnouncementsPage() {
               <button onClick={() => openCreate({ audience: "parents" })} style={btnSecondary} disabled={busy}>
                 Parents Update
               </button>
-              <button onClick={openCreate} style={btnPrimary} disabled={busy}>
+              <button onClick={() => openCreate()} style={btnPrimary} disabled={busy}>
                 + New Announcement
               </button>
             </div>
@@ -563,7 +565,7 @@ export default function AnnouncementsPage() {
               onClick={() => setPinnedOnly((p) => !p)}
               label={pinnedOnly ? "Pinned only ✓" : "Pinned only"}
             />
-            <button onClick={clearFilters} style={btnSecondary} disabled={busy}>
+            <button onClick={() => clearFilters()} style={btnSecondary} disabled={busy}>
               Clear
             </button>
           </div>
@@ -629,10 +631,10 @@ export default function AnnouncementsPage() {
               </div>
 
               <div style={emptyStateActions}>
-                <button onClick={clearFilters} style={btnSecondary}>
+                <button onClick={() => clearFilters()} style={btnSecondary}>
                   Clear Filters
                 </button>
-                <button onClick={openCreate} style={btnPrimary}>
+                <button onClick={() => openCreate()} style={btnPrimary}>
                   + New Announcement
                 </button>
               </div>
