@@ -67,10 +67,30 @@ type AlertState = {
   message: string;
 } | null;
 
+type CurrencyOption = {
+  code: string;
+  label: string;
+};
+
 const TERM_OPTIONS = ["Term 1", "Term 2", "Term 3"];
 const PAYMENT_METHODS = ["Cash", "Card", "Bank Transfer", "Mobile Money", "Cheque"];
 const PAYMENT_PLANS = ["Full", "Monthly", "Installment", "Weekly"];
 const STATUS_OPTIONS = ["Unpaid", "Partial", "Paid"];
+
+const COMMON_CURRENCIES: CurrencyOption[] = [
+  { code: "GMD", label: "Gambian Dalasi (GMD)" },
+  { code: "USD", label: "US Dollar (USD)" },
+  { code: "EUR", label: "Euro (EUR)" },
+  { code: "GBP", label: "British Pound (GBP)" },
+  { code: "NGN", label: "Nigerian Naira (NGN)" },
+  { code: "XOF", label: "West African CFA Franc (XOF)" },
+  { code: "XAF", label: "Central African CFA Franc (XAF)" },
+  { code: "CAD", label: "Canadian Dollar (CAD)" },
+  { code: "AUD", label: "Australian Dollar (AUD)" },
+  { code: "ZAR", label: "South African Rand (ZAR)" },
+  { code: "AED", label: "UAE Dirham (AED)" },
+  { code: "SAR", label: "Saudi Riyal (SAR)" },
+];
 
 export default function FinancePage() {
   const [loading, setLoading] = useState(true);
@@ -79,6 +99,9 @@ export default function FinancePage() {
 
   const [term, setTerm] = useState("Term 1");
   const [grade, setGrade] = useState<string>("");
+  const [currencyMode, setCurrencyMode] = useState<"preset" | "custom">("preset");
+  const [currencyCode, setCurrencyCode] = useState("GMD");
+  const [customCurrencyCode, setCustomCurrencyCode] = useState("");
 
   const [summary, setSummary] = useState<FinanceSummary | null>(null);
 
@@ -89,6 +112,9 @@ export default function FinancePage() {
 
   const [studentSearch, setStudentSearch] = useState("");
   const [students, setStudents] = useState<StudentLite[]>([]);
+
+  const [paymentSearch, setPaymentSearch] = useState("");
+  const [outstandingSearch, setOutstandingSearch] = useState("");
 
   const [tuitionForm, setTuitionForm] = useState({
     student_id: "",
@@ -116,6 +142,12 @@ export default function FinancePage() {
     void loadSummary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [term, grade]);
+
+  const activeCurrency = useMemo(() => {
+    const raw = currencyMode === "custom" ? customCurrencyCode : currencyCode;
+    const cleaned = raw.trim().toUpperCase();
+    return cleaned || "GMD";
+  }, [currencyMode, currencyCode, customCurrencyCode]);
 
   async function loadSummary() {
     setLoading(true);
@@ -284,17 +316,62 @@ export default function FinancePage() {
       .slice(0, 12);
   }, [students, studentSearch]);
 
+  const filteredOutstanding = useMemo(() => {
+    const q = outstandingSearch.trim().toLowerCase();
+    const rows = summary?.outstanding_top || [];
+    if (!q) return rows;
+    return rows.filter((row) =>
+      `${row.name} ${row.student_id} ${row.grade} ${row.status}`.toLowerCase().includes(q)
+    );
+  }, [summary, outstandingSearch]);
+
+  const filteredPayments = useMemo(() => {
+    const q = paymentSearch.trim().toLowerCase();
+    if (!q) return payments;
+    return payments.filter((p) =>
+      `${p.id} ${p.method || ""} ${p.reference || ""} ${p.note || ""} ${p.amount}`.toLowerCase().includes(q)
+    );
+  }, [payments, paymentSearch]);
+
+  const financeInsights = useMemo(() => {
+    const totalDue = summary?.total_due || 0;
+    const totalPaid = summary?.total_paid || 0;
+    const totalBalance = summary?.total_balance || 0;
+    const collectionRate = totalDue > 0 ? (totalPaid / totalDue) * 100 : 0;
+    const avgPerStudent = (summary?.students_count || 0) > 0 ? totalDue / (summary?.students_count || 1) : 0;
+    return {
+      collectionRate,
+      avgPerStudent,
+      totalBalance,
+      totalDue,
+      totalPaid,
+    };
+  }, [summary]);
+
+  const paymentTotals = useMemo(() => {
+    const total = filteredPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+    const count = filteredPayments.length;
+    const avg = count > 0 ? total / count : 0;
+    return { total, count, avg };
+  }, [filteredPayments]);
+
   return (
     <div style={pageShell}>
       <div style={page}>
         <section style={hero}>
-          <div>
+          <div style={heroLeft}>
             <div style={eyebrow}>School Platform</div>
             <h1 style={heroTitle}>Finance Dashboard</h1>
             <p style={subtitle}>
               Track tuition, record payments, monitor balances, and generate finance documents
-              from one premium control center.
+              from one premium control center built for flexible school operations.
             </p>
+
+            <div style={heroMiniRow}>
+              <HeroMiniBadge label="Collection rate" value={`${financeInsights.collectionRate.toFixed(1)}%`} />
+              <HeroMiniBadge label="Currency" value={activeCurrency} />
+              <HeroMiniBadge label="Students" value={String(summary?.students_count ?? 0)} />
+            </div>
           </div>
 
           <div style={heroActions}>
@@ -317,6 +394,68 @@ export default function FinancePage() {
               Refresh
             </button>
           </div>
+        </section>
+
+        <section style={currencySection}>
+          <Panel
+            title="Currency Settings"
+            subtitle="Choose from common currencies or enter any valid 3-letter currency code."
+            right={<span style={pill}>Flexible currency mode</span>}
+          >
+            <div style={currencyGrid}>
+              <Field label="Mode">
+                <select
+                  value={currencyMode}
+                  onChange={(e) => setCurrencyMode(e.target.value as "preset" | "custom")}
+                  style={fieldInput}
+                >
+                  <option value="preset">Preset currency</option>
+                  <option value="custom">Custom currency code</option>
+                </select>
+              </Field>
+
+              {currencyMode === "preset" ? (
+                <Field label="Preset currency">
+                  <select
+                    value={currencyCode}
+                    onChange={(e) => setCurrencyCode(e.target.value)}
+                    style={fieldInput}
+                  >
+                    {COMMON_CURRENCIES.map((c) => (
+                      <option key={c.code} value={c.code}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              ) : (
+                <Field label="Custom currency code">
+                  <input
+                    value={customCurrencyCode}
+                    onChange={(e) => setCustomCurrencyCode(e.target.value.toUpperCase())}
+                    style={fieldInput}
+                    placeholder="e.g. GMD, XOF, NGN, USD"
+                    maxLength={3}
+                  />
+                </Field>
+              )}
+
+              <Field label="Preview">
+                <div style={currencyPreviewCard}>
+                  <div style={currencyPreviewTop}>
+                    <div style={currencyPreviewLabel}>Active display currency</div>
+                    <div style={currencyPreviewCode}>{activeCurrency}</div>
+                  </div>
+                  <div style={currencyPreviewValue}>{money(summary?.total_due ?? 0, activeCurrency)}</div>
+                </div>
+              </Field>
+            </div>
+
+            <div style={currencyHint}>
+              This page now supports any currency code for display. For full multi-currency accounting,
+              you would later store currency per tuition/payment record in the backend.
+            </div>
+          </Panel>
         </section>
 
         {alertState && (
@@ -343,19 +482,19 @@ export default function FinancePage() {
         <section style={statsGrid}>
           <StatCard
             label="Total Due"
-            value={money(summary?.total_due ?? 0)}
+            value={money(summary?.total_due ?? 0, activeCurrency)}
             subtitle="Expected tuition for selected term"
             accent="blue"
           />
           <StatCard
             label="Total Paid"
-            value={money(summary?.total_paid ?? 0)}
+            value={money(summary?.total_paid ?? 0, activeCurrency)}
             subtitle="Payments already received"
             accent="green"
           />
           <StatCard
             label="Outstanding"
-            value={money(summary?.total_balance ?? 0)}
+            value={money(summary?.total_balance ?? 0, activeCurrency)}
             subtitle="Remaining tuition balance"
             accent="amber"
           />
@@ -373,6 +512,84 @@ export default function FinancePage() {
           />
         </section>
 
+        <section style={insightGrid}>
+          <Panel
+            title="Finance Insights"
+            subtitle="Quick reading of how the school is performing financially."
+          >
+            <div style={insightTiles}>
+              <InfoTile label="Collection rate" value={`${financeInsights.collectionRate.toFixed(1)}%`} />
+              <InfoTile label="Average due/student" value={money(financeInsights.avgPerStudent, activeCurrency)} />
+              <InfoTile label="Paid so far" value={money(financeInsights.totalPaid, activeCurrency)} />
+              <InfoTile label="Balance left" value={money(financeInsights.totalBalance, activeCurrency)} />
+            </div>
+
+            <div style={progressCard}>
+              <div style={progressHeader}>
+                <div style={progressTitle}>Tuition collection progress</div>
+                <div style={progressValue}>{financeInsights.collectionRate.toFixed(1)}%</div>
+              </div>
+              <div style={progressTrack}>
+                <div
+                  style={{
+                    ...progressFill,
+                    width: `${Math.max(0, Math.min(100, financeInsights.collectionRate))}%`,
+                  }}
+                />
+              </div>
+            </div>
+          </Panel>
+
+          <Panel
+            title="Quick Actions"
+            subtitle="Fast finance workflows for bursars, admins, and school owners."
+          >
+            <div style={quickActionGrid}>
+              <button
+                style={quickActionBtn}
+                onClick={() =>
+                  setTuitionForm((p) => ({
+                    ...p,
+                    term,
+                    status: "Unpaid",
+                    payment_plan: "Full",
+                  }))
+                }
+              >
+                🧾 New tuition setup
+              </button>
+              <button
+                style={quickActionBtn}
+                onClick={() =>
+                  setPaymentForm((p) => ({
+                    ...p,
+                    method: "Mobile Money",
+                  }))
+                }
+              >
+                📱 Prepare mobile money payment
+              </button>
+              <button
+                style={quickActionBtn}
+                onClick={() => setStatementTerm(term)}
+              >
+                📄 Match lookup to current term
+              </button>
+              <button
+                style={quickActionBtn}
+                onClick={() => {
+                  setGrade("");
+                  setStudentSearch("");
+                  setOutstandingSearch("");
+                  setPaymentSearch("");
+                }}
+              >
+                ✨ Clear finance filters
+              </button>
+            </div>
+          </Panel>
+        </section>
+
         <section style={twoCol}>
           <Panel
             title="Outstanding Balances"
@@ -384,13 +601,22 @@ export default function FinancePage() {
               </span>
             }
           >
+            <div style={panelFilterRow}>
+              <input
+                value={outstandingSearch}
+                onChange={(e) => setOutstandingSearch(e.target.value)}
+                style={fieldInput}
+                placeholder="Search outstanding students"
+              />
+            </div>
+
             {loading ? (
               <EmptyState text="Loading finance summary..." />
-            ) : !summary?.outstanding_top?.length ? (
+            ) : !filteredOutstanding.length ? (
               <EmptyState text="No outstanding balances found." />
             ) : (
               <div style={{ display: "grid", gap: 12 }}>
-                {summary.outstanding_top.map((row) => (
+                {filteredOutstanding.map((row) => (
                   <div key={`${row.student_id}-${row.grade}`} style={outstandingCard}>
                     <div>
                       <div style={outstandingName}>{row.name}</div>
@@ -400,9 +626,9 @@ export default function FinancePage() {
                     </div>
 
                     <div style={outstandingStats}>
-                      <InfoPill label="Due" value={money(row.total_due)} />
-                      <InfoPill label="Paid" value={money(row.paid)} />
-                      <InfoPill label="Balance" value={money(row.balance)} danger />
+                      <InfoPill label="Due" value={money(row.total_due, activeCurrency)} />
+                      <InfoPill label="Paid" value={money(row.paid, activeCurrency)} />
+                      <InfoPill label="Balance" value={money(row.balance, activeCurrency)} danger />
                     </div>
                   </div>
                 ))}
@@ -482,9 +708,9 @@ export default function FinancePage() {
                 </div>
 
                 <div style={financeStatGrid}>
-                  <InfoTile label="Total Due" value={money(tuition.total_amount)} />
-                  <InfoTile label="Paid" value={money(tuition.amount_paid)} />
-                  <InfoTile label="Balance" value={money(tuition.balance_due ?? tuition.balance)} />
+                  <InfoTile label="Total Due" value={money(tuition.total_amount, activeCurrency)} />
+                  <InfoTile label="Paid" value={money(tuition.amount_paid, activeCurrency)} />
+                  <InfoTile label="Balance" value={money(tuition.balance_due ?? tuition.balance, activeCurrency)} />
                   <InfoTile label="Plan" value={tuition.payment_plan || "—"} />
                 </div>
               </div>
@@ -526,7 +752,7 @@ export default function FinancePage() {
                 </select>
               </Field>
 
-              <Field label="Total amount">
+              <Field label={`Total amount (${activeCurrency})`}>
                 <input
                   value={tuitionForm.total_amount}
                   onChange={(e) => setTuitionForm((p) => ({ ...p, total_amount: e.target.value }))}
@@ -535,7 +761,7 @@ export default function FinancePage() {
                 />
               </Field>
 
-              <Field label="Amount paid">
+              <Field label={`Amount paid (${activeCurrency})`}>
                 <input
                   value={tuitionForm.amount_paid}
                   onChange={(e) => setTuitionForm((p) => ({ ...p, amount_paid: e.target.value }))}
@@ -573,6 +799,18 @@ export default function FinancePage() {
               </Field>
             </div>
 
+            <div style={tuitionPreviewCard}>
+              <div style={tuitionPreviewLabel}>Preview</div>
+              <div style={tuitionPreviewValue}>
+                Total {money(Number(tuitionForm.total_amount || 0), activeCurrency)} • Paid{" "}
+                {money(Number(tuitionForm.amount_paid || 0), activeCurrency)} • Balance{" "}
+                {money(
+                  Math.max(0, Number(tuitionForm.total_amount || 0) - Number(tuitionForm.amount_paid || 0)),
+                  activeCurrency
+                )}
+              </div>
+            </div>
+
             <div style={actionsRow}>
               <button style={btnPrimary} onClick={() => void saveTuition()} disabled={busy}>
                 {busy ? "Saving..." : "Save Tuition"}
@@ -591,7 +829,7 @@ export default function FinancePage() {
                 />
               </Field>
 
-              <Field label="Amount">
+              <Field label={`Amount (${activeCurrency})`}>
                 <input
                   value={paymentForm.amount}
                   onChange={(e) => setPaymentForm((p) => ({ ...p, amount: e.target.value }))}
@@ -633,6 +871,13 @@ export default function FinancePage() {
               </Field>
             </div>
 
+            <div style={tuitionPreviewCard}>
+              <div style={tuitionPreviewLabel}>Payment preview</div>
+              <div style={tuitionPreviewValue}>
+                {money(Number(paymentForm.amount || 0), activeCurrency)} via {paymentForm.method || "—"}
+              </div>
+            </div>
+
             <div style={actionsRow}>
               <button style={btnPrimary} onClick={() => void addPayment()} disabled={busy}>
                 {busy ? "Saving..." : "Add Payment"}
@@ -645,9 +890,26 @@ export default function FinancePage() {
           <Panel
             title="Payment History"
             subtitle="Review recorded payments and open printable receipts."
-            right={<span style={pill}>{payments.length} payment(s)</span>}
+            right={<span style={pill}>{filteredPayments.length} payment(s)</span>}
           >
-            {!payments.length ? (
+            <div style={panelFilterRow}>
+              <input
+                value={paymentSearch}
+                onChange={(e) => setPaymentSearch(e.target.value)}
+                style={fieldInput}
+                placeholder="Search payment history"
+              />
+            </div>
+
+            {filteredPayments.length > 0 && (
+              <div style={paymentInsightRow}>
+                <InfoPill label="Payment count" value={String(paymentTotals.count)} />
+                <InfoPill label="Total" value={money(paymentTotals.total, activeCurrency)} />
+                <InfoPill label="Average" value={money(paymentTotals.avg, activeCurrency)} />
+              </div>
+            )}
+
+            {!filteredPayments.length ? (
               <EmptyState text="No payments loaded yet." compact />
             ) : (
               <div style={tableWrap}>
@@ -663,14 +925,14 @@ export default function FinancePage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {payments.map((p) => (
+                    {filteredPayments.map((p) => (
                       <tr key={p.id}>
                         <td style={td}>PAY-{p.id}</td>
                         <td style={td}>{p.timestamp ? formatDate(p.timestamp) : "—"}</td>
                         <td style={td}>{p.method || "—"}</td>
                         <td style={td}>{p.reference || "—"}</td>
                         <td style={{ ...td, textAlign: "right", fontWeight: 900 }}>
-                          {money(p.amount)}
+                          {money(p.amount, activeCurrency)}
                         </td>
                         <td style={{ ...td, textAlign: "right" }}>
                           <button
@@ -768,6 +1030,15 @@ function StatCard({
   );
 }
 
+function HeroMiniBadge({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={heroMiniBadge}>
+      <div style={heroMiniLabel}>{label}</div>
+      <div style={heroMiniValue}>{value}</div>
+    </div>
+  );
+}
+
 function InfoPill({
   label,
   value,
@@ -803,12 +1074,19 @@ function InfoTile({ label, value }: { label: string; value: string }) {
   );
 }
 
-function money(value: number) {
-  return new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 2,
-  }).format(Number(value || 0));
+function money(value: number, currency: string) {
+  const safeCurrency = (currency || "USD").toUpperCase();
+  const amount = Number(value || 0);
+
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: safeCurrency,
+      maximumFractionDigits: 2,
+    }).format(amount);
+  } catch {
+    return `${safeCurrency} ${amount.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+  }
 }
 
 function formatDate(value: string) {
@@ -844,7 +1122,8 @@ function extractErr(
 
 const pageShell: CSSProperties = {
   minHeight: "100vh",
-  background: "linear-gradient(180deg, #0f172a 0%, #111827 45%, #0b1220 100%)",
+  background:
+    "radial-gradient(circle at top right, rgba(59,130,246,0.12), transparent 30%), radial-gradient(circle at top left, rgba(34,197,94,0.10), transparent 28%), linear-gradient(180deg, #0f172a 0%, #111827 45%, #0b1220 100%)",
   color: "#f8fafc",
   padding: 24,
 };
@@ -861,6 +1140,10 @@ const hero: CSSProperties = {
   gap: 16,
   flexWrap: "wrap",
   marginBottom: 18,
+};
+
+const heroLeft: CSSProperties = {
+  maxWidth: 820,
 };
 
 const eyebrow: CSSProperties = {
@@ -886,10 +1169,89 @@ const subtitle: CSSProperties = {
   lineHeight: 1.5,
 };
 
+const heroMiniRow: CSSProperties = {
+  display: "flex",
+  gap: 10,
+  flexWrap: "wrap",
+  marginTop: 16,
+};
+
+const heroMiniBadge: CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.05)",
+};
+
+const heroMiniLabel: CSSProperties = {
+  fontSize: 11,
+  color: "#94a3b8",
+  fontWeight: 800,
+  textTransform: "uppercase",
+  letterSpacing: 0.6,
+};
+
+const heroMiniValue: CSSProperties = {
+  fontSize: 14,
+  color: "#fff",
+  fontWeight: 900,
+  marginTop: 4,
+};
+
 const heroActions: CSSProperties = {
   display: "flex",
   gap: 10,
   flexWrap: "wrap",
+};
+
+const currencySection: CSSProperties = {
+  marginBottom: 18,
+};
+
+const currencyGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr 1fr",
+  gap: 12,
+};
+
+const currencyPreviewCard: CSSProperties = {
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(255,255,255,0.04)",
+  padding: 14,
+};
+
+const currencyPreviewTop: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "center",
+};
+
+const currencyPreviewLabel: CSSProperties = {
+  fontSize: 12,
+  color: "#94a3b8",
+  fontWeight: 800,
+};
+
+const currencyPreviewCode: CSSProperties = {
+  fontSize: 12,
+  color: "#dbeafe",
+  fontWeight: 900,
+};
+
+const currencyPreviewValue: CSSProperties = {
+  marginTop: 10,
+  fontSize: 22,
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const currencyHint: CSSProperties = {
+  marginTop: 12,
+  fontSize: 13,
+  color: "#94a3b8",
+  lineHeight: 1.6,
 };
 
 const statsGrid: CSSProperties = {
@@ -897,6 +1259,78 @@ const statsGrid: CSSProperties = {
   gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
   gap: 14,
   marginBottom: 18,
+};
+
+const insightGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 18,
+  marginBottom: 18,
+};
+
+const insightTiles: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(140px, 1fr))",
+  gap: 12,
+};
+
+const progressCard: CSSProperties = {
+  marginTop: 16,
+  borderRadius: 16,
+  border: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(255,255,255,0.04)",
+  padding: 14,
+};
+
+const progressHeader: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "center",
+};
+
+const progressTitle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 800,
+  color: "#cbd5e1",
+};
+
+const progressValue: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const progressTrack: CSSProperties = {
+  marginTop: 12,
+  width: "100%",
+  height: 12,
+  borderRadius: 999,
+  background: "rgba(255,255,255,0.08)",
+  overflow: "hidden",
+};
+
+const progressFill: CSSProperties = {
+  height: "100%",
+  borderRadius: 999,
+  background: "linear-gradient(90deg, rgba(34,197,94,0.95), rgba(96,165,250,0.95))",
+};
+
+const quickActionGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 12,
+};
+
+const quickActionBtn: CSSProperties = {
+  padding: "14px 14px",
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.05)",
+  color: "#fff",
+  fontWeight: 800,
+  cursor: "pointer",
+  textAlign: "left",
 };
 
 const statCard: CSSProperties = {
@@ -965,6 +1399,10 @@ const panelSubtitle: CSSProperties = {
   marginTop: 6,
   color: "#94a3b8",
   fontSize: 13,
+};
+
+const panelFilterRow: CSSProperties = {
+  marginBottom: 14,
 };
 
 const outstandingCard: CSSProperties = {
@@ -1069,6 +1507,35 @@ const infoTileValue: CSSProperties = {
   fontSize: 20,
   fontWeight: 900,
   color: "#fff",
+};
+
+const tuitionPreviewCard: CSSProperties = {
+  marginTop: 14,
+  borderRadius: 14,
+  padding: 14,
+  border: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(255,255,255,0.04)",
+};
+
+const tuitionPreviewLabel: CSSProperties = {
+  fontSize: 12,
+  color: "#94a3b8",
+  fontWeight: 800,
+  textTransform: "uppercase",
+};
+
+const tuitionPreviewValue: CSSProperties = {
+  marginTop: 8,
+  fontSize: 15,
+  color: "#fff",
+  fontWeight: 900,
+};
+
+const paymentInsightRow: CSSProperties = {
+  display: "flex",
+  gap: 10,
+  flexWrap: "wrap",
+  marginBottom: 14,
 };
 
 const fieldLabel: CSSProperties = {
