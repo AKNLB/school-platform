@@ -1920,6 +1920,8 @@ def api_resource_delete(rid: int):
 
 @app.route("/api/s/<slug>/attendance/report", methods=["GET"])
 @app.route("/api/attendance/report", methods=["GET"])
+@school_context_required
+@roles_required(ROLE_ADMIN, ROLE_TEACHER)
 def api_attendance_report():
     # Optional query params:
     # ?from=YYYY-MM-DD&to=YYYY-MM-DD
@@ -2177,18 +2179,26 @@ def health_db():
 # ---- Attendance ----
 @app.route("/api/s/<slug>/attendance", methods=["GET", "POST", "PUT"])
 @app.route("/api/attendance", methods=["GET", "POST", "PUT"])
+@school_context_required
+@roles_required(ROLE_ADMIN, ROLE_TEACHER)
 def attendance():
     if request.method == "GET":
         grade = request.args.get("grade", type=int)
         day = request.args.get("date")  # YYYY-MM-DD
 
-        q = Attendance.query
+        q = Attendance.query.filter_by(school_id=current_school_id())
+
         if grade is not None:
-            q = q.join(Student, Student.id == Attendance.student_id).filter(Student.grade == grade)
+            q = q.join(Student, Student.id == Attendance.student_id).filter(
+                Student.school_id == current_school_id(),
+                Student.grade == grade,
+            )
+
         if day:
             q = q.filter(Attendance.date == parse_date(day))
 
         recs = q.order_by(Attendance.date.desc(), Attendance.id.desc()).limit(300).all()
+
         return jsonify(
             [
                 {
@@ -2211,8 +2221,17 @@ def attendance():
         if not payload.get("student_id") or not payload.get("date"):
             return jsonify({"error": "student_id and date required"}), 400
 
+        student = Student.query.filter_by(
+            id=int(payload["student_id"]),
+            school_id=current_school_id(),
+        ).first()
+
+        if not student:
+            return jsonify({"error": "Student not found"}), 404
+
         r = Attendance(
-            student_id=int(payload["student_id"]),
+            school_id=current_school_id(),
+            student_id=student.id,
             date=parse_date(payload["date"]),
             status=(payload.get("status") or "present"),
             note=payload.get("note"),
@@ -2242,10 +2261,27 @@ def attendance():
         sid = int(sid)
         dt = parse_date(day)
 
-        # upsert by (student_id, date)
-        r = Attendance.query.filter_by(student_id=sid, date=dt).first()
+        student = Student.query.filter_by(
+            id=sid,
+            school_id=current_school_id(),
+        ).first()
+
+        if not student:
+            continue
+
+        # upsert by (school_id, student_id, date)
+        r = Attendance.query.filter_by(
+            school_id=current_school_id(),
+            student_id=sid,
+            date=dt,
+        ).first()
+
         if r is None:
-            r = Attendance(student_id=sid, date=dt)
+            r = Attendance(
+                school_id=current_school_id(),
+                student_id=sid,
+                date=dt,
+            )
             db.session.add(r)
             created += 1
         else:
@@ -2259,13 +2295,28 @@ def attendance():
     db.session.commit()
     return jsonify({"message": "Attendance saved", "created": created, "updated": updated}), 200
 
+
 @app.route("/api/s/<slug>/attendance/student/<int:student_id>", methods=["GET"])
 @app.route("/api/attendance/student/<int:student_id>", methods=["GET"])
+@school_context_required
+@roles_required(ROLE_ADMIN, ROLE_TEACHER)
 def attendance_student_history(student_id: int):
     limit = int(request.args.get("limit", 30))
+
+    student = Student.query.filter_by(
+        id=student_id,
+        school_id=current_school_id(),
+    ).first()
+
+    if not student:
+        return jsonify({"error": "Student not found"}), 404
+
     rows = (
         Attendance.query
-        .filter_by(student_id=student_id)
+        .filter_by(
+            school_id=current_school_id(),
+            student_id=student_id,
+        )
         .order_by(Attendance.date.desc(), Attendance.id.desc())
         .limit(limit)
         .all()
@@ -2280,8 +2331,7 @@ def attendance_student_history(student_id: int):
             "note": r.note or "",
         }
         for r in rows
-    ])
-
+    ]), 200
 
 
 # ---- Scores / Grades ----
