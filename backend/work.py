@@ -2441,11 +2441,27 @@ def modify_score(score_id):
 # ---- Tuition / Payments ----
 @app.route("/api/s/<slug>/tuition/<int:student_id>", methods=["GET"])
 @app.route("/api/tuition/<int:student_id>", methods=["GET"])
+@school_context_required
+@roles_required(ROLE_ADMIN)
 def get_tuition_info(student_id):
+    student = Student.query.filter_by(
+        id=student_id,
+        school_id=current_school_id()
+    ).first()
+
+    if not student:
+        return jsonify({"error": "Student not found"}), 404
+
     term = request.args.get("term")
-    q = TuitionInfo.query.filter_by(student_id=student_id)
+
+    q = TuitionInfo.query.filter_by(
+        school_id=current_school_id(),
+        student_id=student_id
+    )
+
     if term:
         q = q.filter_by(term=term)
+
     tuition = q.order_by(TuitionInfo.id.desc()).first()
     if not tuition:
         return jsonify({"message": "No tuition info found"}), 404
@@ -2457,11 +2473,8 @@ def get_tuition_info(student_id):
             "term": tuition.term,
             "total_amount": tuition.total_amount,
             "amount_paid": tuition.amount_paid,
-
-            # ✅ BOTH fields provided
             "balance": float(tuition.total_amount) - float(tuition.amount_paid),
             "balance_due": float(tuition.total_amount) - float(tuition.amount_paid),
-
             "payment_plan": tuition.payment_plan,
             "status": tuition.status,
             "payments": [
@@ -2479,9 +2492,10 @@ def get_tuition_info(student_id):
     ), 200
 
 
-
 @app.route("/api/s/<slug>/tuition", methods=["POST"])
 @app.route("/api/tuition", methods=["POST"])
+@school_context_required
+@roles_required(ROLE_ADMIN)
 def create_or_update_tuition():
     data = request.get_json(silent=True) or {}
     required = ["student_id", "term", "total_amount"]
@@ -2493,9 +2507,27 @@ def create_or_update_tuition():
     term = str(data["term"]).strip()
     total_amount = float(data["total_amount"])
 
-    tuition = TuitionInfo.query.filter_by(student_id=student_id, term=term).first()
+    student = Student.query.filter_by(
+        id=student_id,
+        school_id=current_school_id()
+    ).first()
+
+    if not student:
+        return jsonify({"error": "Student not found"}), 404
+
+    tuition = TuitionInfo.query.filter_by(
+        school_id=current_school_id(),
+        student_id=student_id,
+        term=term
+    ).first()
+
     if not tuition:
-        tuition = TuitionInfo(student_id=student_id, term=term, total_amount=total_amount)
+        tuition = TuitionInfo(
+            school_id=current_school_id(),
+            student_id=student_id,
+            term=term,
+            total_amount=total_amount
+        )
         db.session.add(tuition)
     else:
         tuition.total_amount = total_amount
@@ -2511,14 +2543,24 @@ def create_or_update_tuition():
 
 @app.route("/api/s/<slug>/tuition/<int:tuition_id>/payment", methods=["POST"])
 @app.route("/api/tuition/<int:tuition_id>/payment", methods=["POST"])
+@school_context_required
+@roles_required(ROLE_ADMIN)
 def add_payment(tuition_id):
-    tuition = TuitionInfo.query.get_or_404(tuition_id)
+    tuition = TuitionInfo.query.filter_by(
+        id=tuition_id,
+        school_id=current_school_id()
+    ).first()
+
+    if not tuition:
+        return jsonify({"error": "Tuition record not found"}), 404
+
     data = request.get_json(silent=True) or {}
 
     if "amount" not in data:
         return jsonify({"error": "amount is required"}), 400
 
     p = PaymentHistory(
+        school_id=current_school_id(),
         tuition_id=tuition.id,
         amount=float(data["amount"]),
         method=data.get("method"),
