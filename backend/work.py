@@ -2575,11 +2575,18 @@ def add_payment(tuition_id):
 
 @app.route("/api/s/<slug>/settings", methods=["GET"])
 @app.route("/api/settings", methods=["GET"])
+@school_context_required
+@roles_required(ROLE_ADMIN)
 def get_settings():
-    s = SchoolSettings.query.first()
+    s = SchoolSettings.query.filter_by(school_id=current_school_id()).first()
+
     if not s:
-        s = SchoolSettings(school_name="My School")
-        db.session.add(s); db.session.commit()
+        s = SchoolSettings(
+            school_id=current_school_id(),
+            school_name="My School"
+        )
+        db.session.add(s)
+        db.session.commit()
 
     def file_url(fname):
         return url_for("serve_asset", filename=fname, _external=True) if fname else None
@@ -2598,10 +2605,16 @@ def get_settings():
 
 @app.route("/api/s/<slug>/settings", methods=["PUT"])
 @app.route("/api/settings", methods=["PUT"])
+@school_context_required
+@roles_required(ROLE_ADMIN)
 def update_settings():
-    s = SchoolSettings.query.first()
+    s = SchoolSettings.query.filter_by(school_id=current_school_id()).first()
+
     if not s:
-        s = SchoolSettings(school_name="My School")
+        s = SchoolSettings(
+            school_id=current_school_id(),
+            school_name="My School"
+        )
         db.session.add(s)
 
     data = request.get_json(silent=True) or {}
@@ -2615,6 +2628,8 @@ def update_settings():
 
 @app.route("/api/s/<slug>/settings/upload", methods=["POST"])
 @app.route("/api/settings/upload", methods=["POST"])
+@school_context_required
+@roles_required(ROLE_ADMIN)
 def upload_settings_asset():
     """
     multipart/form-data:
@@ -2623,16 +2638,24 @@ def upload_settings_asset():
     """
     kind = (request.form.get("kind") or "").strip()
     f = request.files.get("file")
+
     if not f or not f.filename:
         return jsonify({"error": "file required"}), 400
+
+    if kind not in {"logo", "principal_signature", "teacher_signature"}:
+        return jsonify({"error": "kind must be logo | principal_signature | teacher_signature"}), 400
 
     if not allowed_file(f.filename, {"png", "jpg", "jpeg"}):
         return jsonify({"error": "png/jpg only"}), 400
 
-    s = SchoolSettings.query.first()
+    s = SchoolSettings.query.filter_by(school_id=current_school_id()).first()
     if not s:
-        s = SchoolSettings(school_name="My School")
-        db.session.add(s); db.session.commit()
+        s = SchoolSettings(
+            school_id=current_school_id(),
+            school_name="My School"
+        )
+        db.session.add(s)
+        db.session.commit()
 
     fname = secure_filename(f"{kind}_{int(datetime.utcnow().timestamp())}_{f.filename}")
     save_dir = os.path.join(BASE_DIR, "assets")
@@ -2645,8 +2668,6 @@ def upload_settings_asset():
         s.principal_signature_filename = fname
     elif kind == "teacher_signature":
         s.teacher_signature_filename = fname
-    else:
-        return jsonify({"error": "kind must be logo | principal_signature | teacher_signature"}), 400
 
     db.session.commit()
     return jsonify({"message": "uploaded", "filename": fname}), 201
