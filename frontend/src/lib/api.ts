@@ -15,65 +15,63 @@ function qs(params?: Params) {
 
 type RequestOpts = {
   params?: Params;
-  data?: any; // JSON or FormData
+  data?: any;
   body?: BodyInit;
   headers?: Record<string, string>;
 };
 
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:1994";
+
 async function request(method: string, path: string, opts?: RequestOpts) {
-    // Normalize path
-    const p = path.startsWith("/") ? path : `/${path}`;
-  
-    // If caller passes "/api/...", keep it; otherwise prefix with "/api"
-    const urlPath = p.startsWith("/api") ? p : `/api${p}`;
-  
-    const url = `${urlPath}${qs(opts?.params)}`;
-  
-    const headers: Record<string, string> = { ...(opts?.headers || {}) };
-  
-    let body: BodyInit | undefined = opts?.body;
-  
-    if (opts?.data !== undefined && body === undefined) {
-      if (opts.data instanceof FormData) {
-        body = opts.data;
-        delete headers["Content-Type"];
-      } else {
-        headers["Content-Type"] = "application/json";
-        body = JSON.stringify(opts.data);
-      }
+  const p = path.startsWith("/") ? path : `/${path}`;
+  const urlPath = p.startsWith("/api") ? p : `/api${p}`;
+  const url = `${API_BASE}${urlPath}${qs(opts?.params)}`;
+
+  const headers: Record<string, string> = { ...(opts?.headers || {}) };
+
+  let body: BodyInit | undefined = opts?.body;
+
+  if (opts?.data !== undefined && body === undefined) {
+    if (opts.data instanceof FormData) {
+      body = opts.data;
+      delete headers["Content-Type"];
+    } else {
+      headers["Content-Type"] = "application/json";
+      body = JSON.stringify(opts.data);
     }
-  
-    const res = await fetch(url, {
-      method,
-      credentials: "include",
-      headers,
-      body,
-    });
-  
-    const text = await res.text();
-  
-    let parsed: any = null;
-    try {
-      parsed = text ? JSON.parse(text) : null;
-    } catch {
-      parsed = text || null;
-    }
-  
-    if (!res.ok) {
-      const msg =
-        parsed?.error ||
-        parsed?.message ||
-        (typeof parsed === "string" ? parsed : "") ||
-        `Request failed (${res.status})`;
-  
-      const err: any = new Error(msg);
-      err.response = { status: res.status, data: parsed };
-      throw err;
-    }
-  
-    return { data: parsed };
   }
-  
+
+  const res = await fetch(url, {
+    method,
+    credentials: "include",
+    headers,
+    body,
+  });
+
+  const text = await res.text();
+
+  let parsed: any = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    parsed = text || null;
+  }
+
+  if (!res.ok) {
+    const msg =
+      parsed?.error ||
+      parsed?.message ||
+      (typeof parsed === "string" ? parsed : "") ||
+      `Request failed (${res.status})`;
+
+    const err: any = new Error(msg);
+    err.response = { status: res.status, data: parsed };
+    throw err;
+  }
+
+  return { data: parsed };
+}
 
 export const api = {
   get: (path: string, opts?: { params?: Params; headers?: Record<string, string> }) =>

@@ -26,7 +26,7 @@ import sqlalchemy as sa
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
-
+from flask_cors import CORS
 
 def _sqlite_table_exists(conn, table_name: str) -> bool:
     try:
@@ -71,11 +71,19 @@ def allowed_file(filename: str, allowed_set: set[str]) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in allowed_set
 
 
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_DIR = os.getenv("DB_DIR")
+
+if not DB_DIR:
+    if os.getenv("FLY_APP_NAME"):
+        DB_DIR = "/data"
+    else:
+        DB_DIR = os.path.join(BASE_DIR, "data")
+
+os.makedirs(DB_DIR, exist_ok=True)
 UPLOAD_RESOURCES = os.path.join(BASE_DIR, "uploads", "resources")
 os.makedirs(UPLOAD_RESOURCES, exist_ok=True)
 ALLOWED_RESOURCE_TYPES = {"pdf", "doc", "docx", "txt", "xlsx", "pptx", "png", "jpg", "jpeg"}
-DB_DIR = os.environ.get("DB_DIR", "/data")
 os.makedirs(DB_DIR, exist_ok=True)
 app = Flask(__name__)
 
@@ -109,8 +117,16 @@ migrate = Migrate(app, db)
 
 # CORS: in dev you can allow '*', but for real deployment set CORS_ORIGINS
 # to a comma-separated list (e.g. https://app.example.com,https://admin.example.com)
-_cors_origins = os.environ.get("CORS_ORIGINS", "*")
-_cors_origins = [o.strip() for o in _cors_origins.split(",") if o.strip()] if _cors_origins != "*" else "*"
+from flask_cors import CORS
+
+_cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:3000")
+_cors_origins = [o.strip() for o in _cors_origins.split(",") if o.strip()]
+
+CORS(
+    app,
+    supports_credentials=True,
+    origins=_cors_origins,
+)
 socketio = SocketIO(app, cors_allowed_origins=_cors_origins)
 
 # Refuse unsafe defaults in production.
@@ -1266,19 +1282,71 @@ def login_required(fn):
 
 
 from functools import wraps
-
+ROLE_ADMIN = "admin"
+ROLE_TEACHER = "teacher"
+ROLE_PARENT = "parent"
+ROLE_STUDENT = "student"
 def current_user():
     uid = session.get("user_id")
     if not uid:
         return None
     return User.query.get(int(uid))
 
+def current_role():
+    user = current_user()
+    return user.role if user else None
+
+def current_school_id():
+    return session.get("school_id")
+
+def is_admin():
+    return current_role() == ROLE_ADMIN
+
+def is_teacher():
+    return current_role() == ROLE_TEACHER
+
+def is_parent():
+    return current_role() == ROLE_PARENT
+
+def is_student():
+    return current_role() == ROLE_STUDENT
+
 def admin_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
         u = current_user()
-        if not u or not u.is_active or u.role != "admin":
+        if not u or not u.is_active or u.role != ROLE_ADMIN:
             return jsonify({"error": "Forbidden"}), 403
+        return fn(*args, **kwargs)
+    return wrapper
+
+def roles_required(*allowed_roles):
+    def outer(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            u = current_user()
+            if not u or not u.is_active:
+                return jsonify({"error": "Not authenticated"}), 401
+            if u.role not in allowed_roles:
+                return jsonify({"error": "Forbidden"}), 403
+            return fn(*args, **kwargs)
+        return wrapper
+    return outer
+
+def school_context_required(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        u = current_user()
+        if not u or not u.is_active:
+            return jsonify({"error": "Not authenticated"}), 401
+
+        school_id = current_school_id()
+        if not school_id:
+            return jsonify({"error": "School context missing"}), 403
+
+        if getattr(u, "school_id", None) != school_id:
+            return jsonify({"error": "Forbidden"}), 403
+
         return fn(*args, **kwargs)
     return wrapper
 
@@ -1935,15 +2003,24 @@ def signup():
 # ---- Students CRUD ----
 @app.route("/api/s/<slug>/students", methods=["GET", "POST"])
 @app.route("/api/students", methods=["GET", "POST"])
+@school_context_required
+@roles_required(ROLE_ADMIN, ROLE_TEACHER)
 def students():
     if request.method == "GET":
-        return jsonify([student_to_dict(s) for s in Student.query.order_by(Student.id).all()])
+        rows = Student.query.filter_by(
+            school_id=current_school_id()
+        ).order_by(Student.id).all()
+        return jsonify([student_to_dict(s) for s in rows]), 200
+
+    if not is_admin():
+        return jsonify({"error": "Forbidden"}), 403
 
     data = request.get_json(silent=True) or {}
     if not data.get("name"):
         return jsonify({"error": "Name required"}), 400
 
     s = Student(
+        school_id=current_school_id(),
         name=data["name"].strip(),
         dob=parse_date(data["dob"]) if data.get("dob") else None,
         gender=data.get("gender"),
@@ -1962,15 +2039,26 @@ def students():
 
 @app.route("/api/s/<slug>/students/<int:student_id>", methods=["GET", "PUT", "DELETE"])
 @app.route("/api/students/<int:student_id>", methods=["GET", "PUT", "DELETE"])
+@school_context_required
+@roles_required(ROLE_ADMIN, ROLE_TEACHER, ROLE_PARENT, ROLE_STUDENT)
 def modify_student(student_id):
-    s = Student.query.get_or_404(student_id)
+    s = Student.query.filter_by(
+        id=student_id,
+        school_id=current_school_id()
+    ).first()
 
-    # ✅ This GET fixes your 405 issue on /api/students/<id>
+    if not s:
+        return jsonify({"error": "Student not found"}), 404
+
     if request.method == "GET":
         return jsonify(student_to_dict(s)), 200
 
+    if request.method in ["PUT", "DELETE"] and not is_admin():
+        return jsonify({"error": "Forbidden"}), 403
+
     if request.method == "PUT":
         data = request.get_json(silent=True) or {}
+
         for fld in [
             "name",
             "gender",
