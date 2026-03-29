@@ -2681,25 +2681,36 @@ def serve_asset(filename):
 # Report Card (JSON + PDF download)
 # -----------------------------------------------------------------------------
 def term_date_range(term: str, year: int):
-    # simple defaults; adjust later to your actual school calendar
     if term == "Term 1":
         return date(year, 9, 1), date(year, 12, 31)
     if term == "Term 2":
         return date(year, 1, 1), date(year, 4, 30)
     if term == "Term 3":
         return date(year, 5, 1), date(year, 8, 31)
-    # fallback
     return date(year, 1, 1), date(year, 12, 31)
 
 
 def build_report_card(student_id: int, term: str, grade: int):
-    student = Student.query.get_or_404(student_id)
-    settings = SchoolSettings.query.first()
+    student = Student.query.filter_by(
+        id=student_id,
+        school_id=current_school_id()
+    ).first()
 
-    # --- Scores (term+grade) ---
+    if not student:
+        return None
+
+    settings = SchoolSettings.query.filter_by(
+        school_id=current_school_id()
+    ).first()
+
     scores = (
         Score.query
-        .filter_by(student_id=student_id, term=term, grade=grade)
+        .filter_by(
+            school_id=current_school_id(),
+            student_id=student_id,
+            term=term,
+            grade=grade
+        )
         .order_by(Score.subject.asc(), Score.date.desc())
         .all()
     )
@@ -2725,18 +2736,25 @@ def build_report_card(student_id: int, term: str, grade: int):
         if x >= 40: return "D Satisfactory"
         return "E Working Towards"
 
-    # --- Rank (position within same grade+term by average total) ---
-    # average per student = sum(total)/count(subjects)
-    # Use simple Python ranking to keep it reliable.
-    all_students = Student.query.filter_by(grade=grade).all()
+    all_students = Student.query.filter_by(
+        school_id=current_school_id(),
+        grade=grade
+    ).all()
+
     ranking = []
     for st in all_students:
-        st_scores = Score.query.filter_by(student_id=st.id, term=term, grade=grade).all()
+        st_scores = Score.query.filter_by(
+            school_id=current_school_id(),
+            student_id=st.id,
+            term=term,
+            grade=grade
+        ).all()
         if not st_scores:
             continue
         st_totals = [(int(x.cont_ass_score or 0) + int(x.exam_score or 0)) for x in st_scores]
         st_avg = round(sum(st_totals) / max(len(st_totals), 1), 1)
         ranking.append((st.id, st_avg))
+
     ranking.sort(key=lambda x: x[1], reverse=True)
 
     position = None
@@ -2745,13 +2763,15 @@ def build_report_card(student_id: int, term: str, grade: int):
             position = i
             break
 
-    # --- Attendance summary for term date range ---
     year = date.today().year
     start, end = term_date_range(term, year)
 
     rows = (
         Attendance.query
-        .filter(Attendance.student_id == student_id)
+        .filter_by(
+            school_id=current_school_id(),
+            student_id=student_id
+        )
         .filter(Attendance.date >= start, Attendance.date <= end)
         .all()
     )
@@ -2787,7 +2807,6 @@ def build_report_card(student_id: int, term: str, grade: int):
             "excused": excused,
             "total_days": len(rows),
         },
-        # placeholders for now (we'll store later if you want)
         "remarks": {
             "teacher": "",
             "principal": "",
@@ -2797,15 +2816,28 @@ def build_report_card(student_id: int, term: str, grade: int):
     }
 
 
-
 @app.route("/api/s/<slug>/report-card/<int:student_id>", methods=["GET"])
 @app.route("/api/report-card/<int:student_id>", methods=["GET"])
+@school_context_required
+@roles_required(ROLE_ADMIN, ROLE_TEACHER)
 def report_card_json(student_id):
-    term = request.args.get("term")
-    return jsonify(build_report_card(student_id, term)), 200
+    term = (request.args.get("term") or "").strip()
+    grade = request.args.get("grade", type=int)
+
+    if not term or grade is None:
+        return jsonify({"error": "term and grade are required"}), 400
+
+    report = build_report_card(student_id, term, grade)
+    if not report:
+        return jsonify({"error": "Student not found"}), 404
+
+    return jsonify(report), 200
+
 
 @app.route("/api/s/<slug>/report_card", methods=["GET"])
 @app.route("/api/report_card", methods=["GET"])
+@school_context_required
+@roles_required(ROLE_ADMIN, ROLE_TEACHER)
 def api_report_card_json():
     student_id = request.args.get("student_id", type=int)
     term = (request.args.get("term") or "").strip()
@@ -2814,52 +2846,36 @@ def api_report_card_json():
     if not student_id or not term or grade is None:
         return jsonify({"error": "student_id, term, grade are required"}), 400
 
-    student = Student.query.get_or_404(student_id)
+    report = build_report_card(student_id, term, grade)
+    if not report:
+        return jsonify({"error": "Student not found"}), 404
 
-    # Pull scores for this student/term/grade
-    scores = (Score.query
-              .filter_by(student_id=student_id, term=term, grade=grade)
-              .order_by(Score.date.desc())
-              .all())
-
-    # Latest score per subject
-    latest = {}
-    for s in scores:
-        if s.subject not in latest:
-            latest[s.subject] = s
-
-    subjects = []
-    total_sum = 0.0
-    for subj, s in sorted(latest.items(), key=lambda x: x[0].lower()):
-        ca = float(s.cont_ass_score or 0)
-        ex = float(s.exam_score or 0)
-        tot = ca + ex
-        total_sum += tot
-        subjects.append({
-            "subject": subj,
-            "cont_ass": ca,
-            "exam": ex,
-            "total": tot
-        })
-
-    avg = round((total_sum / len(subjects)), 2) if subjects else 0.0
-
-    return jsonify({
-        "student_id": student.id,
-        "name": student.name,
-        "grade": student.grade,
-        "term": term,
-        "average": avg,
-        "subjects": subjects
-    }), 200
+    return jsonify(report), 200
 
 @app.route("/api/s/<slug>/payments/<int:student_id>", methods=["GET"])
 @app.route("/api/payments/<int:student_id>", methods=["GET"])
+@school_context_required
+@roles_required(ROLE_ADMIN)
 def api_payments_by_student(student_id):
+    student = Student.query.filter_by(
+        id=student_id,
+        school_id=current_school_id()
+    ).first()
+
+    if not student:
+        return jsonify({"error": "Student not found"}), 404
+
     term = request.args.get("term")
-    q = (PaymentHistory.query
-         .join(TuitionInfo, TuitionInfo.id == PaymentHistory.tuition_id)
-         .filter(TuitionInfo.student_id == student_id))
+
+    q = (
+        PaymentHistory.query
+        .join(TuitionInfo, TuitionInfo.id == PaymentHistory.tuition_id)
+        .filter(
+            PaymentHistory.school_id == current_school_id(),
+            TuitionInfo.school_id == current_school_id(),
+            TuitionInfo.student_id == student_id
+        )
+    )
 
     if term:
         q = q.filter(TuitionInfo.term == term)
