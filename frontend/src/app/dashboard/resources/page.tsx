@@ -3,6 +3,11 @@
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { useToast } from "@/components/ui/ToastProvider";
+import LoadingState from "@/components/ui/LoadingState";
+import ErrorState from "@/components/ui/ErrorState";
+import EmptyState from "@/components/ui/EmptyState";
+import ConfirmModal from "@/components/ui/ConfirmModal";
 
 type ResourceRow = {
   id: number;
@@ -60,11 +65,12 @@ const FAVORITES_KEY = "resources:favorites:v1";
 const PINNED_KEY = "resources:pinned:v1";
 
 export default function ResourcesPage() {
+  const { showToast } = useToast();
+
   const [items, setItems] = useState<ResourceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
 
   const [q, setQ] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
@@ -82,6 +88,9 @@ export default function ResourcesPage() {
 
   const [favoriteRoots, setFavoriteRoots] = useState<number[]>([]);
   const [pinnedRoots, setPinnedRoots] = useState<number[]>([]);
+
+  const [deleteTarget, setDeleteTarget] = useState<ResourceRow | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   useEffect(() => {
     try {
@@ -125,7 +134,8 @@ export default function ResourcesPage() {
       const res = await api.get("/resources", { params });
       setItems(Array.isArray(res.data) ? res.data : []);
     } catch (e: unknown) {
-      setErr(extractErr(e, "Failed to load resources."));
+      const message = extractErr(e, "Failed to load resources.");
+      setErr(message);
       setItems([]);
     } finally {
       setLoading(false);
@@ -280,7 +290,6 @@ export default function ResourcesPage() {
     setCategoryFilter("");
     setVisibilityFilter("");
     setSortBy("newest");
-    setSuccess(null);
     setErr(null);
   }
 
@@ -295,7 +304,6 @@ export default function ResourcesPage() {
   async function submitUpload() {
     setFormError(null);
     setErr(null);
-    setSuccess(null);
 
     if (!uploadFile) {
       setFormError("Please choose a file.");
@@ -311,35 +319,65 @@ export default function ResourcesPage() {
       fd.append("category", form.category || "");
       fd.append("visibility", form.visibility || "all");
 
-      await api.post("/resources", fd, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      await api.post("/resources", fd);
 
-      setSuccess("Resource uploaded successfully.");
+      showToast("Resource uploaded successfully.", "success");
       setUploadOpen(false);
       await loadResources();
     } catch (e: unknown) {
-      setFormError(extractErr(e, "Upload failed."));
+      const message = extractErr(e, "Upload failed.");
+      setFormError(message);
+      showToast(message, "error");
     } finally {
       setBusy(false);
     }
   }
 
-  async function handleDelete(resource: ResourceRow) {
-    const ok = window.confirm(`Delete "${resource.filename}"?`);
-    if (!ok) return;
-
+  async function uploadNewVersion(file: File, resource: ResourceRow) {
     setBusy(true);
     setErr(null);
-    setSuccess(null);
 
     try {
-      await api.delete(`/resources/${resource.id}`);
-      setSuccess("Resource deleted.");
+      const fd = new FormData();
+      fd.append("file", file);
+      if (resource.uploader) fd.append("uploader", resource.uploader);
+
+      await api.post(`/resources/${resource.id}/version`, fd);
+
+      showToast(`New version uploaded for "${resource.filename}".`, "success");
       await loadResources();
     } catch (e: unknown) {
-      setErr(extractErr(e, "Delete failed."));
+      const message = extractErr(e, "Version upload failed.");
+      setErr(message);
+      showToast(message, "error");
     } finally {
+      setBusy(false);
+      setVersionTarget(null);
+    }
+  }
+
+  function requestDelete(resource: ResourceRow) {
+    setDeleteTarget(resource);
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+
+    setDeleteBusy(true);
+    setBusy(true);
+    setErr(null);
+
+    try {
+      await api.delete(`/resources/${deleteTarget.id}`);
+      showToast("Resource deleted.", "success");
+      setDeleteTarget(null);
+      await loadResources();
+    } catch (e: unknown) {
+      const message = extractErr(e, "Delete failed.");
+      setErr(message);
+      showToast(message, "error");
+    } finally {
+      setDeleteBusy(false);
       setBusy(false);
     }
   }
@@ -352,32 +390,32 @@ export default function ResourcesPage() {
     }
   }
 
-  async function uploadNewVersion(file: File, resource: ResourceRow) {
-    setBusy(true);
-    setErr(null);
-    setSuccess(null);
-
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      if (resource.uploader) fd.append("uploader", resource.uploader);
-
-      await api.post(`/resources/${resource.id}/version`, fd, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
-
-      setSuccess(`New version uploaded for "${resource.filename}".`);
-      await loadResources();
-    } catch (e: unknown) {
-      setErr(extractErr(e, "Version upload failed."));
-    } finally {
-      setBusy(false);
-      setVersionTarget(null);
-    }
-  }
-
   function downloadUrl(id: number) {
     return `/api/resources/${id}/download`;
+  }
+
+  if (loading) {
+    return (
+      <div style={pageShell}>
+        <div style={backgroundGlowOne} />
+        <div style={backgroundGlowTwo} />
+        <div style={page}>
+          <LoadingState text="Loading resources..." />
+        </div>
+      </div>
+    );
+  }
+
+  if (err && items.length === 0) {
+    return (
+      <div style={pageShell}>
+        <div style={backgroundGlowOne} />
+        <div style={backgroundGlowTwo} />
+        <div style={page}>
+          <ErrorState text={err} onRetry={() => void loadResources()} />
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -599,19 +637,11 @@ export default function ResourcesPage() {
           </div>
         </section>
 
-        {err && (
-          <div style={errorAlert}>
-            <strong style={{ marginRight: 8 }}>Error:</strong>
-            {err}
+        {err ? (
+          <div style={inlineErrorWrap}>
+            <ErrorState text={err} onRetry={() => void loadResources()} />
           </div>
-        )}
-
-        {success && (
-          <div style={successAlert}>
-            <strong style={{ marginRight: 8 }}>Success:</strong>
-            {success}
-          </div>
-        )}
+        ) : null}
 
         <section style={panel}>
           <div style={panelHeader}>
@@ -704,32 +734,30 @@ export default function ResourcesPage() {
             </div>
           )}
 
-          {loading ? (
-            <div style={emptyState}>Loading resources...</div>
-          ) : grouped.length === 0 ? (
-            <div style={libraryEmptyWrap}>
-              <div style={libraryEmptyIcon}>📚</div>
-              <div style={libraryEmptyTitle}>No resources found</div>
-              <div style={libraryEmptyText}>
-                Try adjusting your filters, clearing the search, or uploading a new resource for teachers and admin.
-              </div>
-
-              <div style={libraryEmptyActions}>
-                <button onClick={clearFilters} style={btnSecondary}>
-                  Clear Filters
-                </button>
-                <button onClick={() => openUpload()} style={btnPrimary}>
-                  Upload Resource
-                </button>
-                <button
-                  onClick={() =>
-                    openUpload({ type: "worksheet", category: "Examination", visibility: "student" })
-                  }
-                  style={btnSecondary}
-                >
-                  Add Worksheet
-                </button>
-              </div>
+          {grouped.length === 0 ? (
+            <div style={emptyStateWrap}>
+              <EmptyState
+                title="No resources found"
+                text="Try adjusting your filters, clearing the search, or uploading a new resource for teachers and admin."
+                action={
+                  <div style={libraryEmptyActions}>
+                    <button onClick={clearFilters} style={btnSecondary}>
+                      Clear Filters
+                    </button>
+                    <button onClick={() => openUpload()} style={btnPrimary}>
+                      Upload Resource
+                    </button>
+                    <button
+                      onClick={() =>
+                        openUpload({ type: "worksheet", category: "Examination", visibility: "student" })
+                      }
+                      style={btnSecondary}
+                    >
+                      Add Worksheet
+                    </button>
+                  </div>
+                }
+              />
             </div>
           ) : (
             <div style={{ padding: 16, display: "grid", gap: 14 }}>
@@ -779,7 +807,7 @@ export default function ResourcesPage() {
                         <button onClick={() => startNewVersion(latest)} style={btnSecondary} disabled={busy}>
                           New Version
                         </button>
-                        <button onClick={() => void handleDelete(latest)} style={btnDanger} disabled={busy}>
+                        <button onClick={() => requestDelete(latest)} style={btnDanger} disabled={busy}>
                           Delete
                         </button>
                       </div>
@@ -830,7 +858,11 @@ export default function ResourcesPage() {
 
         {uploadOpen && (
           <Modal title="Upload Resource" onClose={closeUpload}>
-            {formError && <div style={{ ...errorAlert, marginBottom: 12 }}>{formError}</div>}
+            {formError ? (
+              <div style={{ marginBottom: 12 }}>
+                <ErrorState text={formError} />
+              </div>
+            ) : null}
 
             <div style={uploadTipCard}>
               <div style={uploadTipTitle}>Helpful Tip</div>
@@ -939,6 +971,25 @@ export default function ResourcesPage() {
             </div>
           </Modal>
         )}
+
+        <ConfirmModal
+          open={!!deleteTarget}
+          title="Delete resource"
+          message={
+            deleteTarget
+              ? `Delete "${deleteTarget.filename}"?`
+              : ""
+          }
+          confirmText="Delete"
+          cancelText="Cancel"
+          danger
+          busy={deleteBusy}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => {
+            if (deleteBusy) return;
+            setDeleteTarget(null);
+          }}
+        />
       </div>
     </div>
   );
@@ -1739,46 +1790,13 @@ const fieldInput: CSSProperties = {
   outline: "none",
 };
 
-const emptyState: CSSProperties = {
+const emptyStateWrap: CSSProperties = {
   padding: 22,
-  color: "#cbd5e1",
 };
 
 const emptyMini: CSSProperties = {
   padding: "10px 0",
   color: "#cbd5e1",
-};
-
-const libraryEmptyWrap: CSSProperties = {
-  padding: "42px 22px",
-  display: "grid",
-  placeItems: "center",
-  textAlign: "center",
-};
-
-const libraryEmptyIcon: CSSProperties = {
-  width: 72,
-  height: 72,
-  borderRadius: 20,
-  display: "grid",
-  placeItems: "center",
-  background: "rgba(96,165,250,0.12)",
-  border: "1px solid rgba(96,165,250,0.18)",
-  fontSize: 32,
-};
-
-const libraryEmptyTitle: CSSProperties = {
-  marginTop: 16,
-  fontSize: 22,
-  fontWeight: 900,
-  color: "#fff",
-};
-
-const libraryEmptyText: CSSProperties = {
-  marginTop: 8,
-  maxWidth: 620,
-  color: "#94a3b8",
-  lineHeight: 1.6,
 };
 
 const libraryEmptyActions: CSSProperties = {
@@ -2140,20 +2158,6 @@ const iconBtn: CSSProperties = {
   cursor: "pointer",
 };
 
-const errorAlert: CSSProperties = {
+const inlineErrorWrap: CSSProperties = {
   marginBottom: 16,
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(239,68,68,0.22)",
-  background: "rgba(127,29,29,0.24)",
-  color: "#fecaca",
-};
-
-const successAlert: CSSProperties = {
-  marginBottom: 16,
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(34,197,94,0.22)",
-  background: "rgba(20,83,45,0.24)",
-  color: "#bbf7d0",
 };

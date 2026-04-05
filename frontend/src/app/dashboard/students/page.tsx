@@ -3,6 +3,11 @@
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
+import { useToast } from "@/components/ui/ToastProvider";
+import LoadingState from "@/components/ui/LoadingState";
+import ErrorState from "@/components/ui/ErrorState";
+import EmptyState from "@/components/ui/EmptyState";
+import ConfirmModal from "@/components/ui/ConfirmModal";
 
 type Student = {
   id: number;
@@ -101,11 +106,12 @@ const emptyForm: StudentForm = {
 const TERMS = ["Term 1", "Term 2", "Term 3"];
 
 export default function StudentsPage() {
+  const { showToast } = useToast();
+
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
 
   const [students, setStudents] = useState<Student[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -124,6 +130,9 @@ export default function StudentsPage() {
   const [form, setForm] = useState<StudentForm>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
 
+  const [deleteTarget, setDeleteTarget] = useState<Student | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
   async function loadStudents() {
     setLoading(true);
     setErr(null);
@@ -139,7 +148,8 @@ export default function StudentsPage() {
         setSelectedId(null);
       }
     } catch (e: unknown) {
-      setErr(extractErr(e, "Failed to load students."));
+      const message = extractErr(e, "Failed to load students.");
+      setErr(message);
       setStudents([]);
       setSelectedId(null);
     } finally {
@@ -183,7 +193,8 @@ export default function StudentsPage() {
         setTuition(null);
       }
     } catch (e: unknown) {
-      setErr(extractErr(e, "Failed to load student records."));
+      const message = extractErr(e, "Failed to load student records.");
+      setErr(message);
       setAttendance([]);
       setPayments([]);
       setScores([]);
@@ -364,7 +375,6 @@ export default function StudentsPage() {
     setBusy(true);
     setFormError(null);
     setErr(null);
-    setSuccess(null);
 
     try {
       const payload = {
@@ -381,35 +391,78 @@ export default function StudentsPage() {
       };
 
       await api.post("/students", payload);
-      setSuccess("Student added successfully.");
+      showToast("Student added successfully.", "success");
       setOpen(false);
       await loadStudents();
     } catch (e: unknown) {
-      setFormError(extractErr(e, "Failed to add student."));
+      const message = extractErr(e, "Failed to add student.");
+      setFormError(message);
+      showToast(message, "error");
     } finally {
       setBusy(false);
     }
   }
 
-  async function deleteStudent(student: Student) {
-    const ok = window.confirm(
-      `Delete student "${student.name}"?\n\nThis will remove the student profile.`
-    );
-    if (!ok) return;
+  function requestDeleteStudent(student: Student) {
+    setDeleteTarget(student);
+  }
 
+  async function confirmDeleteStudent() {
+    if (!deleteTarget) return;
+
+    setDeleteBusy(true);
     setBusy(true);
     setErr(null);
-    setSuccess(null);
 
     try {
-      await api.delete(`/students/${student.id}`);
-      setSuccess(`Deleted ${student.name}.`);
+      const targetId = deleteTarget.id;
+      const targetName = deleteTarget.name;
+
+      await api.delete(`/students/${targetId}`);
+      showToast(`Deleted ${targetName}.`, "success");
+
+      setDeleteTarget(null);
+
       await loadStudents();
+
+      if (selectedId === targetId) {
+        setAttendance([]);
+        setPayments([]);
+        setScores([]);
+        setTuition(null);
+      }
     } catch (e: unknown) {
-      setErr(extractErr(e, "Failed to delete student."));
+      const message = extractErr(e, "Failed to delete student.");
+      setErr(message);
+      showToast(message, "error");
     } finally {
+      setDeleteBusy(false);
       setBusy(false);
     }
+  }
+
+  if (loading) {
+    return (
+      <div style={pageShell}>
+        <div style={bgGlowOne} />
+        <div style={bgGlowTwo} />
+        <div style={page}>
+          <LoadingState text="Loading students..." />
+        </div>
+      </div>
+    );
+  }
+
+  if (err && students.length === 0) {
+    return (
+      <div style={pageShell}>
+        <div style={bgGlowOne} />
+        <div style={bgGlowTwo} />
+        <div style={page}>
+          <ErrorState text={err} onRetry={() => void loadStudents()} />
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -488,19 +541,11 @@ export default function StudentsPage() {
           </div>
         </section>
 
-        {err && (
-          <div style={errorAlert}>
-            <strong style={{ marginRight: 8 }}>Error:</strong>
-            {err}
+        {err ? (
+          <div style={inlineErrorWrap}>
+            <ErrorState text={err} onRetry={() => void loadStudents()} />
           </div>
-        )}
-
-        {success && (
-          <div style={successAlert}>
-            <strong style={{ marginRight: 8 }}>Success:</strong>
-            {success}
-          </div>
-        )}
+        ) : null}
 
         <div style={layout}>
           <section style={leftPanel}>
@@ -534,10 +579,8 @@ export default function StudentsPage() {
             </div>
 
             <div style={listWrap}>
-              {loading ? (
-                <div style={emptyState}>Loading students...</div>
-              ) : directoryRows.length === 0 ? (
-                <div style={emptyState}>No students found.</div>
+              {directoryRows.length === 0 ? (
+                <EmptyState title="No students found" text="Try another search or grade filter." />
               ) : (
                 directoryRows.map((student) => {
                   const active = selectedId === student.id;
@@ -578,8 +621,11 @@ export default function StudentsPage() {
 
           <section style={rightPanel}>
             {!selectedStudent ? (
-              <div style={panel}>
-                <div style={emptyState}>Select a student to view details.</div>
+              <div style={panelBodyWrap}>
+                <EmptyState
+                  title="No student selected"
+                  text="Choose a student from the directory to view profile, attendance, finance, and scores."
+                />
               </div>
             ) : (
               <>
@@ -631,7 +677,7 @@ export default function StudentsPage() {
                       </button>
 
                       <button
-                        onClick={() => void deleteStudent(selectedStudent)}
+                        onClick={() => requestDeleteStudent(selectedStudent)}
                         style={btnDanger}
                         disabled={busy}
                       >
@@ -834,7 +880,11 @@ export default function StudentsPage() {
 
         {open && (
           <Modal title="Add New Student" onClose={closeCreate}>
-            {formError && <div style={{ ...errorAlert, marginBottom: 12 }}>{formError}</div>}
+            {formError ? (
+              <div style={{ marginBottom: 12 }}>
+                <ErrorState text={formError} />
+              </div>
+            ) : null}
 
             <div style={createIntroCard}>
               <div style={createIntroTitle}>Student Registration</div>
@@ -948,6 +998,25 @@ export default function StudentsPage() {
             </div>
           </Modal>
         )}
+
+        <ConfirmModal
+          open={!!deleteTarget}
+          title="Delete student"
+          message={
+            deleteTarget
+              ? `Delete "${deleteTarget.name}"? This will remove the student profile.`
+              : ""
+          }
+          confirmText="Delete"
+          cancelText="Cancel"
+          danger
+          busy={deleteBusy}
+          onConfirm={() => void confirmDeleteStudent()}
+          onCancel={() => {
+            if (deleteBusy) return;
+            setDeleteTarget(null);
+          }}
+        />
       </div>
     </div>
   );
@@ -1400,6 +1469,13 @@ const panel: CSSProperties = {
   backdropFilter: "blur(10px)",
 };
 
+const panelBodyWrap: CSSProperties = {
+  borderRadius: 18,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(15,23,42,0.72)",
+  padding: 16,
+};
+
 const panelHeader: CSSProperties = {
   padding: 16,
   borderBottom: "1px solid rgba(255,255,255,0.08)",
@@ -1648,11 +1724,6 @@ const td: CSSProperties = {
   fontSize: 14,
 };
 
-const emptyState: CSSProperties = {
-  padding: 20,
-  color: "#cbd5e1",
-};
-
 const emptyInline: CSSProperties = {
   color: "#cbd5e1",
   fontSize: 14,
@@ -1805,24 +1876,6 @@ const iconBtn: CSSProperties = {
   cursor: "pointer",
 };
 
-const errorAlert: CSSProperties = {
-  marginBottom: 16,
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(239,68,68,0.22)",
-  background: "rgba(127,29,29,0.24)",
-  color: "#fecaca",
-};
-
-const successAlert: CSSProperties = {
-  marginBottom: 16,
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(34,197,94,0.22)",
-  background: "rgba(20,83,45,0.24)",
-  color: "#bbf7d0",
-};
-
 const activityFeed: CSSProperties = {
   display: "grid",
   gap: 12,
@@ -1847,4 +1900,8 @@ const activityMeta: CSSProperties = {
   marginTop: 4,
   fontSize: 13,
   color: "#94a3b8",
+};
+
+const inlineErrorWrap: CSSProperties = {
+  marginBottom: 16,
 };

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ReactNode, useMemo, useState } from "react";
+import { useToast } from "@/components/ui/ToastProvider";
 
 const navItems = [
   { label: "Dashboard", href: "/dashboard", icon: "🏠", group: "Core" },
@@ -21,6 +22,7 @@ const navItems = [
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const { showToast } = useToast();
 
   const [collapsed, setCollapsed] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -47,10 +49,19 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   async function logout() {
     try {
       setLoggingOut(true);
-      await fetch("/api/auth/logout", {
+
+      const res = await fetch("/api/auth/logout", {
         method: "POST",
         credentials: "include",
       });
+
+      if (!res.ok) {
+        showToast("Logout request failed. Redirecting anyway.", "error");
+      } else {
+        showToast("Logged out successfully.", "success");
+      }
+    } catch {
+      showToast("Logout failed. Redirecting anyway.", "error");
     } finally {
       router.replace("/login");
     }
@@ -149,7 +160,10 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
           <button
             onClick={logout}
-            style={styles.logoutBtn}
+            style={{
+              ...styles.logoutBtn,
+              ...(loggingOut ? styles.logoutBtnDisabled : {}),
+            }}
             disabled={loggingOut}
             title="Logout"
           >
@@ -411,6 +425,11 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     justifyContent: "center",
     gap: 10,
+  },
+
+  logoutBtnDisabled: {
+    opacity: 0.7,
+    cursor: "not-allowed",
   },
 
   mainArea: {

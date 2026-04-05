@@ -3,6 +3,11 @@
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
+import { useToast } from "@/components/ui/ToastProvider";
+import LoadingState from "@/components/ui/LoadingState";
+import ErrorState from "@/components/ui/ErrorState";
+import EmptyState from "@/components/ui/EmptyState";
+import ConfirmModal from "@/components/ui/ConfirmModal";
 
 type Audience = "all" | "teachers" | "parents" | "students";
 type SortValue = "date-asc" | "date-desc" | "title" | "audience";
@@ -41,10 +46,11 @@ const emptyForm: EventForm = {
 };
 
 export default function EventsPage() {
+  const { showToast } = useToast();
+
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
 
   const [items, setItems] = useState<SchoolEvent[]>([]);
   const [search, setSearch] = useState("");
@@ -59,6 +65,9 @@ export default function EventsPage() {
   const [form, setForm] = useState<EventForm>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
 
+  const [deleteTarget, setDeleteTarget] = useState<SchoolEvent | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
   async function load() {
     setLoading(true);
     setError(null);
@@ -72,7 +81,8 @@ export default function EventsPage() {
       const rows = Array.isArray(res.data) ? res.data : [];
       setItems(rows);
     } catch (e: unknown) {
-      setError(extractErr(e, "Failed to load events"));
+      const message = extractErr(e, "Failed to load events");
+      setError(message);
       setItems([]);
     } finally {
       setLoading(false);
@@ -216,6 +226,7 @@ export default function EventsPage() {
     setSearch("");
     setSortBy("date-asc");
     setViewMode("upcoming");
+    setError(null);
   }
 
   function validate(payload: EventForm): string | null {
@@ -233,7 +244,6 @@ export default function EventsPage() {
   async function submit() {
     setFormError(null);
     setError(null);
-    setSuccess(null);
 
     const validation = validate(form);
     if (validation) {
@@ -264,7 +274,7 @@ export default function EventsPage() {
           await load();
         }
 
-        setSuccess("Event created successfully.");
+        showToast("Event created successfully.", "success");
       } else {
         if (!editing?.id) throw new Error("No event selected.");
         const res = await api.put(`/events/${editing.id}`, payload);
@@ -276,37 +286,66 @@ export default function EventsPage() {
           await load();
         }
 
-        setSuccess("Event updated successfully.");
+        showToast("Event updated successfully.", "success");
       }
 
       setOpen(false);
     } catch (e: unknown) {
-      setFormError(extractErr(e, "Failed to save event"));
+      const message = extractErr(e, "Failed to save event");
+      setFormError(message);
+      showToast(message, "error");
     } finally {
       setBusy(false);
     }
   }
 
-  async function remove(event: SchoolEvent) {
-    const ok = window.confirm(`Delete "${event.title}"?`);
-    if (!ok) return;
+  function requestRemove(event: SchoolEvent) {
+    setDeleteTarget(event);
+  }
 
+  async function confirmRemove() {
+    if (!deleteTarget) return;
+
+    setDeleteBusy(true);
     setBusy(true);
     setError(null);
-    setSuccess(null);
 
     const previous = items;
-    setItems((prev) => prev.filter((x) => x.id !== event.id));
+    setItems((prev) => prev.filter((x) => x.id !== deleteTarget.id));
 
     try {
-      await api.delete(`/events/${event.id}`);
-      setSuccess("Event deleted.");
+      await api.delete(`/events/${deleteTarget.id}`);
+      showToast("Event deleted.", "success");
+      setDeleteTarget(null);
     } catch (e: unknown) {
       setItems(previous);
-      setError(extractErr(e, "Failed to delete event"));
+      const message = extractErr(e, "Failed to delete event");
+      setError(message);
+      showToast(message, "error");
     } finally {
+      setDeleteBusy(false);
       setBusy(false);
     }
+  }
+
+  if (loading) {
+    return (
+      <div style={pageShell}>
+        <div style={page}>
+          <LoadingState text="Loading events..." />
+        </div>
+      </div>
+    );
+  }
+
+  if (error && items.length === 0) {
+    return (
+      <div style={pageShell}>
+        <div style={page}>
+          <ErrorState text={error} onRetry={() => void load()} />
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -489,56 +528,40 @@ export default function EventsPage() {
           </section>
         )}
 
-        {error && (
-          <div style={alertBox}>
-            <strong style={{ marginRight: 8 }}>Error:</strong>
-            {error}
+        {error ? (
+          <div style={inlineErrorWrap}>
+            <ErrorState text={error} onRetry={() => void load()} />
           </div>
-        )}
-
-        {success && (
-          <div style={successBox}>
-            <strong style={{ marginRight: 8 }}>Success:</strong>
-            {success}
-          </div>
-        )}
+        ) : null}
 
         <section style={panel}>
           <div style={panelHeader}>
             <div style={panelHeaderTop}>
               <div>
                 <div style={panelTitle}>Event Schedule</div>
-                <div style={panelSubtitle}>
-                  {loading ? "Loading events..." : `${filtered.length} event(s) shown`}
-                </div>
+                <div style={panelSubtitle}>{`${filtered.length} event(s) shown`}</div>
               </div>
 
-              <div style={resultPill}>
-                {filtered.length} visible
-              </div>
+              <div style={resultPill}>{filtered.length} visible</div>
             </div>
           </div>
 
-          {loading ? (
-            <div style={emptyState}>
-              <div style={emptyStateTitle}>Loading events...</div>
-              <div style={emptyStateText}>Please wait while the schedule is prepared.</div>
-            </div>
-          ) : filtered.length === 0 ? (
-            <div style={emptyState}>
-              <div style={emptyStateIcon}>🗓️</div>
-              <div style={emptyStateTitle}>No events found</div>
-              <div style={emptyStateText}>
-                Create your first event or adjust the filters.
-              </div>
-              <div style={emptyActions}>
-                <button onClick={resetFilters} style={btnSecondary}>
-                  Clear Filters
-                </button>
-                <button onClick={() => openCreate()} style={btnPrimary}>
-                  + New Event
-                </button>
-              </div>
+          {filtered.length === 0 ? (
+            <div style={emptyStateWrap}>
+              <EmptyState
+                title="No events found"
+                text="Create your first event or adjust the filters."
+                action={
+                  <div style={emptyActions}>
+                    <button onClick={resetFilters} style={btnSecondary}>
+                      Clear Filters
+                    </button>
+                    <button onClick={() => openCreate()} style={btnPrimary}>
+                      + New Event
+                    </button>
+                  </div>
+                }
+              />
             </div>
           ) : (
             <div style={eventList}>
@@ -577,7 +600,7 @@ export default function EventsPage() {
                           <button style={btnSecondary} onClick={() => openEdit(event)} disabled={busy}>
                             Edit
                           </button>
-                          <button style={btnDanger} onClick={() => void remove(event)} disabled={busy}>
+                          <button style={btnDanger} onClick={() => requestRemove(event)} disabled={busy}>
                             Delete
                           </button>
                         </div>
@@ -592,7 +615,11 @@ export default function EventsPage() {
 
         {open && (
           <Modal title={mode === "create" ? "New Event" : "Edit Event"} onClose={closeModal}>
-            {formError && <div style={{ ...alertBox, marginBottom: 12 }}>{formError}</div>}
+            {formError ? (
+              <div style={{ marginBottom: 12 }}>
+                <ErrorState text={formError} />
+              </div>
+            ) : null}
 
             <div style={composeCard}>
               <div style={composeTitle}>Event Planning</div>
@@ -689,6 +716,25 @@ export default function EventsPage() {
             </div>
           </Modal>
         )}
+
+        <ConfirmModal
+          open={!!deleteTarget}
+          title="Delete event"
+          message={
+            deleteTarget
+              ? `Delete "${deleteTarget.title}"?`
+              : ""
+          }
+          confirmText="Delete"
+          cancelText="Cancel"
+          danger
+          busy={deleteBusy}
+          onConfirm={() => void confirmRemove()}
+          onCancel={() => {
+            if (deleteBusy) return;
+            setDeleteTarget(null);
+          }}
+        />
       </div>
     </div>
   );
@@ -1348,24 +1394,6 @@ const locationPill: CSSProperties = {
   cursor: "pointer",
 };
 
-const alertBox: CSSProperties = {
-  marginBottom: 16,
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(239,68,68,0.35)",
-  background: "rgba(239,68,68,0.12)",
-  color: "#fee2e2",
-};
-
-const successBox: CSSProperties = {
-  marginBottom: 16,
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(34,197,94,0.28)",
-  background: "rgba(34,197,94,0.12)",
-  color: "#dcfce7",
-};
-
 const panel: CSSProperties = {
   marginTop: 16,
   borderRadius: 18,
@@ -1410,26 +1438,8 @@ const resultPill: CSSProperties = {
   fontWeight: 800,
 };
 
-const emptyState: CSSProperties = {
+const emptyStateWrap: CSSProperties = {
   padding: 28,
-  textAlign: "center",
-  color: "#cbd5e1",
-};
-
-const emptyStateIcon: CSSProperties = {
-  fontSize: 34,
-};
-
-const emptyStateTitle: CSSProperties = {
-  fontSize: 18,
-  fontWeight: 900,
-  color: "#ffffff",
-};
-
-const emptyStateText: CSSProperties = {
-  marginTop: 8,
-  fontSize: 14,
-  opacity: 0.82,
 };
 
 const emptyActions: CSSProperties = {
@@ -1570,4 +1580,8 @@ const modalActions: CSSProperties = {
   display: "flex",
   justifyContent: "flex-end",
   gap: 10,
+};
+
+const inlineErrorWrap: CSSProperties = {
+  marginBottom: 16,
 };

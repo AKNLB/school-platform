@@ -3,6 +3,10 @@
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
+import { useToast } from "@/components/ui/ToastProvider";
+import LoadingState from "@/components/ui/LoadingState";
+import ErrorState from "@/components/ui/ErrorState";
+import EmptyState from "@/components/ui/EmptyState";
 
 type FinanceSummary = {
   term: string;
@@ -62,11 +66,6 @@ type StudentLite = {
   grade: number;
 };
 
-type AlertState = {
-  type: "error" | "success";
-  message: string;
-} | null;
-
 type CurrencyOption = {
   code: string;
   label: string;
@@ -93,9 +92,11 @@ const COMMON_CURRENCIES: CurrencyOption[] = [
 ];
 
 export default function FinancePage() {
+  const { showToast } = useToast();
+
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [alertState, setAlertState] = useState<AlertState>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
 
   const [term, setTerm] = useState("Term 1");
   const [grade, setGrade] = useState<string>("");
@@ -135,12 +136,10 @@ export default function FinancePage() {
 
   useEffect(() => {
     void Promise.all([loadSummary(), loadStudents()]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     void loadSummary();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [term, grade]);
 
   const activeCurrency = useMemo(() => {
@@ -156,8 +155,10 @@ export default function FinancePage() {
       if (grade) params.grade = grade;
       const res = await api.get("/finance/dashboard", { params });
       setSummary(res.data as FinanceSummary);
+      setPageError(null);
     } catch (e: unknown) {
-      setAlertState({ type: "error", message: extractErr(e, "Failed to load finance summary.") });
+      const message = extractErr(e, "Failed to load finance summary.");
+      setPageError(message);
     } finally {
       setLoading(false);
     }
@@ -181,12 +182,11 @@ export default function FinancePage() {
 
   async function loadStudentFinance() {
     if (!studentId || !statementTerm) {
-      setAlertState({ type: "error", message: "Select a student and term first." });
+      showToast("Select a student and term first.", "error");
       return;
     }
 
     setBusy(true);
-    setAlertState(null);
 
     try {
       const [tuitionRes, paymentRes] = await Promise.all([
@@ -201,10 +201,12 @@ export default function FinancePage() {
         ...prev,
         tuition_id: String((tuitionRes.data as TuitionRecord).id || ""),
       }));
+
+      showToast("Student finance loaded.", "success");
     } catch (e: unknown) {
       setTuition(null);
       setPayments([]);
-      setAlertState({ type: "error", message: extractErr(e, "Failed to load student finance details.") });
+      showToast(extractErr(e, "Failed to load student finance details."), "error");
     } finally {
       setBusy(false);
     }
@@ -212,12 +214,11 @@ export default function FinancePage() {
 
   async function saveTuition() {
     if (!tuitionForm.student_id || !tuitionForm.term || !tuitionForm.total_amount) {
-      setAlertState({ type: "error", message: "Student, term, and total amount are required." });
+      showToast("Student, term, and total amount are required.", "error");
       return;
     }
 
     setBusy(true);
-    setAlertState(null);
 
     try {
       await api.post("/tuition", {
@@ -229,7 +230,7 @@ export default function FinancePage() {
         status: tuitionForm.status,
       });
 
-      setAlertState({ type: "success", message: "Tuition record saved successfully." });
+      showToast("Tuition record saved successfully.", "success");
       await loadSummary();
 
       if (
@@ -240,7 +241,7 @@ export default function FinancePage() {
         await loadStudentFinance();
       }
     } catch (e: unknown) {
-      setAlertState({ type: "error", message: extractErr(e, "Failed to save tuition record.") });
+      showToast(extractErr(e, "Failed to save tuition record."), "error");
     } finally {
       setBusy(false);
     }
@@ -248,12 +249,11 @@ export default function FinancePage() {
 
   async function addPayment() {
     if (!paymentForm.tuition_id || !paymentForm.amount) {
-      setAlertState({ type: "error", message: "Choose a tuition record and enter a payment amount." });
+      showToast("Choose a tuition record and enter a payment amount.", "error");
       return;
     }
 
     setBusy(true);
-    setAlertState(null);
 
     try {
       await api.post(`/tuition/${paymentForm.tuition_id}/payment`, {
@@ -263,7 +263,7 @@ export default function FinancePage() {
         note: paymentForm.note,
       });
 
-      setAlertState({ type: "success", message: "Payment added successfully." });
+      showToast("Payment added successfully.", "success");
 
       setPaymentForm((prev) => ({
         ...prev,
@@ -275,7 +275,7 @@ export default function FinancePage() {
       await loadSummary();
       await loadStudentFinance();
     } catch (e: unknown) {
-      setAlertState({ type: "error", message: extractErr(e, "Failed to add payment.") });
+      showToast(extractErr(e, "Failed to add payment."), "error");
     } finally {
       setBusy(false);
     }
@@ -283,7 +283,7 @@ export default function FinancePage() {
 
   function openStatementPdf() {
     if (!studentId || !statementTerm) {
-      setAlertState({ type: "error", message: "Choose a student and term first." });
+      showToast("Choose a student and term first.", "error");
       return;
     }
     const url = `/api/finance/statement?student_id=${encodeURIComponent(studentId)}&term=${encodeURIComponent(
@@ -294,7 +294,7 @@ export default function FinancePage() {
 
   function openStatementCsv() {
     if (!studentId || !statementTerm) {
-      setAlertState({ type: "error", message: "Choose a student and term first." });
+      showToast("Choose a student and term first.", "error");
       return;
     }
     const url = `/api/finance/statement?student_id=${encodeURIComponent(studentId)}&term=${encodeURIComponent(
@@ -354,6 +354,26 @@ export default function FinancePage() {
     const avg = count > 0 ? total / count : 0;
     return { total, count, avg };
   }, [filteredPayments]);
+
+  if (loading) {
+    return (
+      <div style={pageShell}>
+        <div style={page}>
+          <LoadingState text="Loading finance dashboard..." />
+        </div>
+      </div>
+    );
+  }
+
+  if (pageError && !summary) {
+    return (
+      <div style={pageShell}>
+        <div style={page}>
+          <ErrorState text={pageError} onRetry={() => void loadSummary()} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={pageShell}>
@@ -458,26 +478,11 @@ export default function FinancePage() {
           </Panel>
         </section>
 
-        {alertState && (
-          <div
-            style={{
-              ...alert,
-              borderColor:
-                alertState.type === "success"
-                  ? "rgba(74, 222, 128, 0.35)"
-                  : "rgba(248, 113, 113, 0.35)",
-              background:
-                alertState.type === "success"
-                  ? "rgba(74, 222, 128, 0.10)"
-                  : "rgba(248, 113, 113, 0.10)",
-            }}
-          >
-            <strong style={{ marginRight: 8 }}>
-              {alertState.type === "success" ? "Success:" : "Error:"}
-            </strong>
-            {alertState.message}
+        {pageError ? (
+          <div style={inlineErrorWrap}>
+            <ErrorState text={pageError} onRetry={() => void loadSummary()} />
           </div>
-        )}
+        ) : null}
 
         <section style={statsGrid}>
           <StatCard
@@ -610,9 +615,7 @@ export default function FinancePage() {
               />
             </div>
 
-            {loading ? (
-              <EmptyState text="Loading finance summary..." />
-            ) : !filteredOutstanding.length ? (
+            {!filteredOutstanding.length ? (
               <EmptyState text="No outstanding balances found." />
             ) : (
               <div style={{ display: "grid", gap: 12 }}>
@@ -996,10 +999,6 @@ function Field({
       {children}
     </div>
   );
-}
-
-function EmptyState({ text, compact }: { text: string; compact?: boolean }) {
-  return <div style={{ ...emptyState, padding: compact ? 12 : 22 }}>{text}</div>;
 }
 
 function StatCard({
@@ -1574,24 +1573,6 @@ const btnSecondary: CSSProperties = {
   cursor: "pointer",
 };
 
-const alert: CSSProperties = {
-  marginTop: 14,
-  marginBottom: 14,
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.14)",
-  background: "rgba(255,255,255,0.06)",
-  color: "#f8fafc",
-};
-
-const emptyState: CSSProperties = {
-  padding: 22,
-  color: "#cbd5e1",
-  borderRadius: 14,
-  border: "1px dashed rgba(255,255,255,0.14)",
-  background: "rgba(255,255,255,0.03)",
-};
-
 const pill: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
@@ -1638,4 +1619,8 @@ const miniBtn: CSSProperties = {
   color: "#fff",
   fontWeight: 800,
   cursor: "pointer",
+};
+
+const inlineErrorWrap: CSSProperties = {
+  marginBottom: 16,
 };

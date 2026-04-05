@@ -3,6 +3,10 @@
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
+import { useToast } from "@/components/ui/ToastProvider";
+import LoadingState from "@/components/ui/LoadingState";
+import ErrorState from "@/components/ui/ErrorState";
+import EmptyState from "@/components/ui/EmptyState";
 
 type StudentLite = {
   id: number;
@@ -23,31 +27,55 @@ type ScoreRow = {
   grade: number;
 };
 
+type ReportSubject = {
+  subject: string;
+  cont_ass: number;
+  exam: number;
+  total: number;
+};
+
 type ReportCardResponse = {
   student_id: number;
   name: string;
-  grade: number;
+  grade: number | string;
   term: string;
   average: number;
-  subjects: {
-    subject: string;
-    cont_ass: number;
-    exam: number;
-    total: number;
-  }[];
+  subjects: ReportSubject[];
+  school?: {
+    school_name?: string;
+    address?: string;
+    phone?: string;
+    email?: string;
+    principal_name?: string;
+    logo_url?: string | null;
+    principal_signature_url?: string | null;
+    teacher_signature_url?: string | null;
+  };
+  student?: {
+    id: number;
+    name: string;
+    grade?: number;
+    gender?: string;
+    email?: string;
+    guardian_name?: string;
+    guardian_contact?: string;
+    photo_filename?: string | null;
+  };
+  summary?: {
+    subject_count: number;
+    grand_total: number;
+    average: number;
+  };
 };
-
-type AlertState = {
-  type: "error" | "success";
-  message: string;
-} | null;
 
 const TERM_OPTIONS = ["Term 1", "Term 2", "Term 3"];
 
 export default function ReportCardsPage() {
+  const { showToast } = useToast();
+
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [alertState, setAlertState] = useState<AlertState>(null);
+  const [pageError, setPageError] = useState<string | null>(null);
 
   const [students, setStudents] = useState<StudentLite[]>([]);
   const [scores, setScores] = useState<ScoreRow[]>([]);
@@ -76,7 +104,7 @@ export default function ReportCardsPage() {
 
   async function initialize() {
     setLoading(true);
-    setAlertState(null);
+    setPageError(null);
 
     try {
       const [studentsRes, scoresRes] = await Promise.all([
@@ -98,26 +126,103 @@ export default function ReportCardsPage() {
 
       setScores(scoreRows as ScoreRow[]);
     } catch (e: unknown) {
-      setAlertState({
-        type: "error",
-        message: extractErr(e, "Failed to load report card data."),
-      });
+      setPageError(extractErr(e, "Failed to load report card data."));
     } finally {
       setLoading(false);
     }
   }
 
+  function normalizeReportResponse(data: unknown): ReportCardResponse {
+    const raw = (data ?? {}) as Record<string, unknown>;
+
+    const rawSubjects = Array.isArray(raw.subjects)
+      ? raw.subjects
+      : Array.isArray(raw.scores)
+        ? raw.scores
+        : [];
+
+    const subjects: ReportSubject[] = rawSubjects.map((row) => {
+      const item = row as Record<string, unknown>;
+      return {
+        subject: String(item.subject || ""),
+        cont_ass: Number(item.cont_ass ?? item.cont_ass_score ?? 0),
+        exam: Number(item.exam ?? item.exam_score ?? 0),
+        total: Number(
+          item.total ??
+            (Number(item.cont_ass ?? item.cont_ass_score ?? 0) +
+              Number(item.exam ?? item.exam_score ?? 0))
+        ),
+      };
+    });
+
+    const studentObj =
+      raw.student && typeof raw.student === "object"
+        ? (raw.student as Record<string, unknown>)
+        : null;
+
+    const summaryObj =
+      raw.summary && typeof raw.summary === "object"
+        ? (raw.summary as Record<string, unknown>)
+        : null;
+
+    return {
+      student_id: Number(raw.student_id ?? studentObj?.id ?? 0),
+      name: String(raw.name ?? studentObj?.name ?? ""),
+      grade: (raw.grade ?? studentObj?.grade ?? selectedGrade ?? "") as number | string,
+      term: String(raw.term ?? selectedTerm ?? ""),
+      average: Number(raw.average ?? summaryObj?.average ?? 0),
+      subjects,
+      school:
+        raw.school && typeof raw.school === "object"
+          ? (raw.school as ReportCardResponse["school"])
+          : undefined,
+      student:
+        studentObj
+          ? {
+              id: Number(studentObj.id ?? 0),
+              name: String(studentObj.name ?? ""),
+              grade: Number(studentObj.grade ?? 0),
+              gender: typeof studentObj.gender === "string" ? studentObj.gender : undefined,
+              email: typeof studentObj.email === "string" ? studentObj.email : undefined,
+              guardian_name:
+                typeof studentObj.guardian_name === "string"
+                  ? studentObj.guardian_name
+                  : undefined,
+              guardian_contact:
+                typeof studentObj.guardian_contact === "string"
+                  ? studentObj.guardian_contact
+                  : undefined,
+              photo_filename:
+                typeof studentObj.photo_filename === "string"
+                  ? studentObj.photo_filename
+                  : undefined,
+            }
+          : undefined,
+      summary:
+        summaryObj
+          ? {
+              subject_count: Number(summaryObj.subject_count ?? subjects.length),
+              grand_total: Number(
+                summaryObj.grand_total ??
+                  subjects.reduce((sum, s) => sum + Number(s.total || 0), 0)
+              ),
+              average: Number(summaryObj.average ?? 0),
+            }
+          : {
+              subject_count: subjects.length,
+              grand_total: subjects.reduce((sum, s) => sum + Number(s.total || 0), 0),
+              average: Number(raw.average ?? 0),
+            },
+    };
+  }
+
   async function generateReport() {
     if (!selectedStudentId || !selectedTerm || !selectedGrade) {
-      setAlertState({
-        type: "error",
-        message: "Select a student, term, and grade first.",
-      });
+      showToast("Select a student, term, and grade first.", "error");
       return;
     }
 
     setBusy(true);
-    setAlertState(null);
 
     try {
       const res = await api.get("/report_card", {
@@ -128,17 +233,12 @@ export default function ReportCardsPage() {
         },
       });
 
-      setReport(res.data as ReportCardResponse);
-      setAlertState({
-        type: "success",
-        message: "Report card loaded successfully.",
-      });
+      const normalized = normalizeReportResponse(res.data);
+      setReport(normalized);
+      showToast("Report card loaded successfully.", "success");
     } catch (e: unknown) {
       setReport(null);
-      setAlertState({
-        type: "error",
-        message: extractErr(e, "Failed to generate report card."),
-      });
+      showToast(extractErr(e, "Failed to generate report card."), "error");
     } finally {
       setBusy(false);
     }
@@ -146,27 +246,27 @@ export default function ReportCardsPage() {
 
   function openPdf() {
     if (!selectedStudentId || !selectedTerm || !selectedGrade) {
-      setAlertState({
-        type: "error",
-        message: "Select a student, term, and grade first.",
-      });
+      showToast("Select a student, term, and grade first.", "error");
       return;
     }
-
+  
     const params = new URLSearchParams({
-      student_id: selectedStudentId,
       term: selectedTerm,
       grade: selectedGrade,
     });
-
+  
     if (teacherRemark.trim()) {
       params.set("teacher_remark", teacherRemark.trim());
     }
     if (principalRemark.trim()) {
       params.set("principal_remark", principalRemark.trim());
     }
-
-    window.open(`/api/report_card/pdf?${params.toString()}`, "_blank", "noopener,noreferrer");
+  
+    window.open(
+      `/api/report-card/${selectedStudentId}/pdf?${params.toString()}`,
+      "_blank",
+      "noopener,noreferrer"
+    );
   }
 
   function clearSelection() {
@@ -176,7 +276,8 @@ export default function ReportCardsPage() {
     setTeacherRemark("");
     setPrincipalRemark("");
     setReport(null);
-    setAlertState(null);
+    setPageError(null);
+    showToast("Report card selection cleared.", "info");
   }
 
   const filteredStudents = useMemo(() => {
@@ -277,6 +378,30 @@ export default function ReportCardsPage() {
     return round1(total / report.subjects.length);
   }, [report]);
 
+  if (loading) {
+    return (
+      <div style={pageShell}>
+        <div style={bgGlowOne} />
+        <div style={bgGlowTwo} />
+        <div style={page}>
+          <LoadingState text="Loading report card data..." />
+        </div>
+      </div>
+    );
+  }
+
+  if (pageError && students.length === 0 && scores.length === 0) {
+    return (
+      <div style={pageShell}>
+        <div style={bgGlowOne} />
+        <div style={bgGlowTwo} />
+        <div style={page}>
+          <ErrorState text={pageError} onRetry={() => void initialize()} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={pageShell}>
       <div style={bgGlowOne} />
@@ -309,26 +434,11 @@ export default function ReportCardsPage() {
           </div>
         </section>
 
-        {alertState && (
-          <div
-            style={{
-              ...alert,
-              borderColor:
-                alertState.type === "success"
-                  ? "rgba(74, 222, 128, 0.35)"
-                  : "rgba(248, 113, 113, 0.35)",
-              background:
-                alertState.type === "success"
-                  ? "rgba(74, 222, 128, 0.10)"
-                  : "rgba(248, 113, 113, 0.10)",
-            }}
-          >
-            <strong style={{ marginRight: 8 }}>
-              {alertState.type === "success" ? "Success:" : "Error:"}
-            </strong>
-            {alertState.message}
+        {pageError ? (
+          <div style={inlineErrorWrap}>
+            <ErrorState text={pageError} onRetry={() => void initialize()} />
           </div>
-        )}
+        ) : null}
 
         <section style={statsGrid}>
           <StatCard
@@ -546,7 +656,7 @@ export default function ReportCardsPage() {
           >
             {!report ? (
               <EmptyState text="Generate a report card to preview results here." />
-            ) : !report.subjects.length ? (
+            ) : !report.subjects?.length ? (
               <EmptyState text="No scores found for this student, term, and grade." />
             ) : (
               <div style={tableWrap}>
@@ -561,7 +671,7 @@ export default function ReportCardsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {report.subjects.map((row) => (
+                    {report.subjects?.map((row) => (
                       <tr key={row.subject}>
                         <td style={tdStrong}>{row.subject}</td>
                         <td style={{ ...td, textAlign: "right" }}>{row.cont_ass}</td>
@@ -815,10 +925,6 @@ function MiniStat({
       <div style={{ marginTop: 4, fontWeight: 900, color: "#fff" }}>{value}</div>
     </div>
   );
-}
-
-function EmptyState({ text }: { text: string }) {
-  return <div style={emptyState}>{text}</div>;
 }
 
 function gradeLetter(total: number) {
@@ -1143,16 +1249,6 @@ const statSub: CSSProperties = {
   fontSize: 13,
 };
 
-const alert: CSSProperties = {
-  marginTop: 14,
-  marginBottom: 14,
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(255,255,255,0.14)",
-  background: "rgba(255,255,255,0.06)",
-  color: "#f8fafc",
-};
-
 const twoCol: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "1fr 1fr",
@@ -1361,14 +1457,6 @@ const highlightValue: CSSProperties = {
   color: "#fff",
 };
 
-const emptyState: CSSProperties = {
-  padding: 22,
-  color: "#cbd5e1",
-  borderRadius: 14,
-  border: "1px dashed rgba(255,255,255,0.14)",
-  background: "rgba(255,255,255,0.03)",
-};
-
 const tableWrap: CSSProperties = {
   overflowX: "auto",
 };
@@ -1525,4 +1613,8 @@ const remarksText: CSSProperties = {
   marginTop: 8,
   color: "#fff",
   lineHeight: 1.6,
+};
+
+const inlineErrorWrap: CSSProperties = {
+  marginBottom: 16,
 };

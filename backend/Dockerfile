@@ -3,8 +3,8 @@ FROM python:3.11-slim
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PORT=1994
 
-# WeasyPrint/system libs
 RUN apt-get update && apt-get install -y --no-install-recommends \
   build-essential \
   cmake \
@@ -29,5 +29,6 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY . /app/
 
-EXPOSE 8000
-CMD ["gunicorn", "-b", "0.0.0.0:8000", "wsgi:app", "--workers", "2", "--threads", "4", "--timeout", "120"]
+EXPOSE 1994
+
+CMD ["gunicorn", "-k", "eventlet", "-w", "1", "-b", "0.0.0.0:1994", "work:app", "--timeout", "120"]

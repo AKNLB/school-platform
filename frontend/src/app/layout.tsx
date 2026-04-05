@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import ToastProvider from "@/components/ui/ToastProvider";
 
 export const metadata: Metadata = {
   title: "School Platform",
@@ -12,7 +13,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body style={{ margin: 0 }}>{children}</body>
+      <body style={{ margin: 0 }}>
+        <ToastProvider>{children}</ToastProvider>
+      </body>
     </html>
   );
 }

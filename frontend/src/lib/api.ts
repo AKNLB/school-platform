@@ -1,16 +1,41 @@
-// frontend/src/lib/api.ts
-
 export type Params = Record<string, string | number | boolean | undefined | null>;
 
 function qs(params?: Params) {
   if (!params) return "";
   const sp = new URLSearchParams();
+
   for (const [k, v] of Object.entries(params)) {
     if (v === undefined || v === null || v === "") continue;
     sp.set(k, String(v));
   }
+
   const s = sp.toString();
   return s ? `?${s}` : "";
+}
+
+const API_BASE = "";
+
+let csrfToken: string | null = null;
+
+async function ensureCsrfToken() {
+  if (csrfToken) return csrfToken;
+
+  const res = await fetch(`${API_BASE}/api/csrf-token`, {
+    credentials: "include",
+  });
+
+  if (!res.ok) {
+    throw new Error("Failed to fetch CSRF token");
+  }
+
+  const data = await res.json().catch(() => null);
+  csrfToken = data?.csrf_token || null;
+
+  if (!csrfToken) {
+    throw new Error("Missing CSRF token");
+  }
+
+  return csrfToken;
 }
 
 type RequestOpts = {
@@ -19,9 +44,6 @@ type RequestOpts = {
   body?: BodyInit;
   headers?: Record<string, string>;
 };
-
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:1994";
 
 async function request(method: string, path: string, opts?: RequestOpts) {
   const p = path.startsWith("/") ? path : `/${path}`;
@@ -35,11 +57,15 @@ async function request(method: string, path: string, opts?: RequestOpts) {
   if (opts?.data !== undefined && body === undefined) {
     if (opts.data instanceof FormData) {
       body = opts.data;
-      delete headers["Content-Type"];
     } else {
       headers["Content-Type"] = "application/json";
       body = JSON.stringify(opts.data);
     }
+  }
+
+  if (!["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase())) {
+    const token = await ensureCsrfToken();
+    headers["X-CSRFToken"] = token;
   }
 
   const res = await fetch(url, {
@@ -73,21 +99,38 @@ async function request(method: string, path: string, opts?: RequestOpts) {
   return { data: parsed };
 }
 
+export function clearApiSessionState() {
+  csrfToken = null;
+}
+
 export const api = {
-  get: (path: string, opts?: { params?: Params; headers?: Record<string, string> }) =>
-    request("GET", path, { params: opts?.params, headers: opts?.headers }),
+  get: (
+    path: string,
+    opts?: { params?: Params; headers?: Record<string, string> }
+  ) => request("GET", path, { params: opts?.params, headers: opts?.headers }),
 
-  post: (path: string, data?: any, opts?: { params?: Params; headers?: Record<string, string> }) =>
-    request("POST", path, { params: opts?.params, data, headers: opts?.headers }),
+  post: (
+    path: string,
+    data?: any,
+    opts?: { params?: Params; headers?: Record<string, string> }
+  ) => request("POST", path, { params: opts?.params, data, headers: opts?.headers }),
 
-  put: (path: string, data?: any, opts?: { params?: Params; headers?: Record<string, string> }) =>
-    request("PUT", path, { params: opts?.params, data, headers: opts?.headers }),
+  put: (
+    path: string,
+    data?: any,
+    opts?: { params?: Params; headers?: Record<string, string> }
+  ) => request("PUT", path, { params: opts?.params, data, headers: opts?.headers }),
 
-  patch: (path: string, data?: any, opts?: { params?: Params; headers?: Record<string, string> }) =>
-    request("PATCH", path, { params: opts?.params, data, headers: opts?.headers }),
+  patch: (
+    path: string,
+    data?: any,
+    opts?: { params?: Params; headers?: Record<string, string> }
+  ) => request("PATCH", path, { params: opts?.params, data, headers: opts?.headers }),
 
-  delete: (path: string, opts?: { params?: Params; headers?: Record<string, string> }) =>
-    request("DELETE", path, { params: opts?.params, headers: opts?.headers }),
+  delete: (
+    path: string,
+    opts?: { params?: Params; headers?: Record<string, string> }
+  ) => request("DELETE", path, { params: opts?.params, headers: opts?.headers }),
 };
 
 export default api;

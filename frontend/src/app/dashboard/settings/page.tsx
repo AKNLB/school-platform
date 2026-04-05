@@ -3,6 +3,10 @@
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { useToast } from "@/components/ui/ToastProvider";
+import LoadingState from "@/components/ui/LoadingState";
+import ErrorState from "@/components/ui/ErrorState";
+import EmptyState from "@/components/ui/EmptyState";
 
 type SettingsData = {
   school_name: string;
@@ -31,12 +35,18 @@ const emptyForm: FormState = {
   principal_name: "",
 };
 
+function absolutizeAssetUrl(url?: string | null) {
+  if (!url) return null;
+  return url;
+}
+
 export default function SettingsPage() {
+  const { showToast } = useToast();
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploadingKind, setUploadingKind] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
 
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
@@ -61,7 +71,8 @@ export default function SettingsPage() {
         principal_name: data.principal_name,
       });
     } catch (e: unknown) {
-      setErr(extractErr(e, "Failed to load settings."));
+      const message = extractErr(e, "Failed to load settings.");
+      setErr(message);
       setSettings(null);
       setForm(emptyForm);
     } finally {
@@ -72,6 +83,21 @@ export default function SettingsPage() {
   useEffect(() => {
     void loadSettings();
   }, []);
+
+  const resolvedLogoUrl = useMemo(
+    () => absolutizeAssetUrl(settings?.logo_url),
+    [settings?.logo_url]
+  );
+
+  const resolvedPrincipalSignatureUrl = useMemo(
+    () => absolutizeAssetUrl(settings?.principal_signature_url),
+    [settings?.principal_signature_url]
+  );
+
+  const resolvedTeacherSignatureUrl = useMemo(
+    () => absolutizeAssetUrl(settings?.teacher_signature_url),
+    [settings?.teacher_signature_url]
+  );
 
   const profileStats = useMemo(() => {
     const completed = [
@@ -133,7 +159,6 @@ export default function SettingsPage() {
   async function saveSettings() {
     setSaving(true);
     setErr(null);
-    setSuccess(null);
 
     try {
       await api.put("/settings", {
@@ -144,49 +169,56 @@ export default function SettingsPage() {
         principal_name: form.principal_name.trim(),
       });
 
-      setSuccess("Settings saved successfully.");
+      showToast("Settings saved successfully.", "success");
       await loadSettings();
     } catch (e: unknown) {
-      setErr(extractErr(e, "Failed to save settings."));
+      const message = extractErr(e, "Failed to save settings.");
+      setErr(message);
+      showToast(message, "error");
     } finally {
       setSaving(false);
     }
   }
 
-  async function uploadAsset(kind: "logo" | "principal_signature" | "teacher_signature", file: File) {
-    const okTypes = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
+  async function uploadAsset(
+    kind: "logo" | "principal_signature" | "teacher_signature",
+    file: File
+  ) {
+    const okTypes = ["image/png", "image/jpeg", "image/jpg"];
+    const allowedExt = ["png", "jpg", "jpeg"];
     const extension = file.name.split(".").pop()?.toLowerCase() || "";
-    const allowedExt = ["png", "jpg", "jpeg", "webp"];
 
     if (!okTypes.includes(file.type) && !allowedExt.includes(extension)) {
-      setErr("Please upload a PNG, JPG, JPEG, or WEBP image.");
+      const message = "Please upload a PNG, JPG, or JPEG image.";
+      setErr(message);
+      showToast(message, "error");
       return;
     }
 
     setUploadingKind(kind);
     setErr(null);
-    setSuccess(null);
 
     try {
       const fd = new FormData();
       fd.append("kind", kind);
       fd.append("file", file);
 
-      await api.post("/settings/upload", fd, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      await api.post("/settings/upload", fd);
 
-      setSuccess(
+      showToast(
         kind === "logo"
           ? "School logo uploaded."
           : kind === "principal_signature"
             ? "Principal signature uploaded."
-            : "Teacher signature uploaded."
+            : "Teacher signature uploaded.",
+        "success"
       );
 
       await loadSettings();
     } catch (e: unknown) {
-      setErr(extractErr(e, "Upload failed."));
+      const message = extractErr(e, "Upload failed.");
+      setErr(message);
+      showToast(message, "error");
     } finally {
       setUploadingKind(null);
     }
@@ -201,8 +233,52 @@ export default function SettingsPage() {
       email: settings.email || "",
       principal_name: settings.principal_name || "",
     });
-    setSuccess(null);
     setErr(null);
+    showToast("Form reset to saved values.", "info");
+  }
+
+  if (loading) {
+    return (
+      <div style={pageShell}>
+        <div style={bgGlowOne} />
+        <div style={bgGlowTwo} />
+        <div style={page}>
+          <LoadingState text="Loading settings..." />
+        </div>
+      </div>
+    );
+  }
+
+  if (err && !settings) {
+    return (
+      <div style={pageShell}>
+        <div style={bgGlowOne} />
+        <div style={bgGlowTwo} />
+        <div style={page}>
+          <ErrorState text={err} onRetry={() => void loadSettings()} />
+        </div>
+      </div>
+    );
+  }
+
+  if (!settings) {
+    return (
+      <div style={pageShell}>
+        <div style={bgGlowOne} />
+        <div style={bgGlowTwo} />
+        <div style={page}>
+          <EmptyState
+            title="Settings unavailable"
+            text="No school settings could be loaded."
+            action={
+              <button onClick={() => void loadSettings()} style={btnPrimary}>
+                Retry
+              </button>
+            }
+          />
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -244,7 +320,7 @@ export default function SettingsPage() {
         <section style={statsGrid}>
           <StatCard label="Profile Completion" value={`${profileStats.pct}%`} accent="blue" />
           <StatCard label="Filled Items" value={`${profileStats.completed}/${profileStats.total}`} accent="green" />
-          <StatCard label="Logo" value={settings?.logo_url ? "Added" : "Missing"} accent="purple" />
+          <StatCard label="Logo" value={settings.logo_url ? "Added" : "Missing"} accent="purple" />
           <StatCard label="Signatures" value={signatureStatus(settings)} accent="amber" />
         </section>
 
@@ -286,248 +362,234 @@ export default function SettingsPage() {
           </div>
         </section>
 
-        {err && (
-          <div style={errorAlert}>
-            <strong style={{ marginRight: 8 }}>Error:</strong>
-            {err}
+        {err ? (
+          <div style={inlineErrorWrap}>
+            <ErrorState text={err} onRetry={() => void loadSettings()} />
           </div>
-        )}
+        ) : null}
 
-        {success && (
-          <div style={successAlert}>
-            <strong style={{ marginRight: 8 }}>Success:</strong>
-            {success}
-          </div>
-        )}
-
-        {loading ? (
+        <div style={contentGrid}>
           <section style={panel}>
-            <div style={loadingBox}>Loading settings...</div>
+            <div style={panelHeader}>
+              <div>
+                <div style={panelTitle}>School Information</div>
+                <div style={panelSub}>Core identity details used across the platform.</div>
+              </div>
+            </div>
+
+            <div style={panelBody}>
+              <div style={infoTipCard}>
+                <div style={infoTipTitle}>School Profile Tip</div>
+                <div style={infoTipText}>
+                  These details power the header area on report cards, financial documents,
+                  and printable school records.
+                </div>
+              </div>
+
+              <div style={formGrid}>
+                <Field label="School Name" full>
+                  <input
+                    style={fieldInput}
+                    value={form.school_name}
+                    onChange={(e) => setForm((prev) => ({ ...prev, school_name: e.target.value }))}
+                    placeholder="Enter school name"
+                  />
+                </Field>
+
+                <Field label="Address" full>
+                  <textarea
+                    style={{ ...fieldInput, minHeight: 100, resize: "vertical" }}
+                    value={form.address}
+                    onChange={(e) => setForm((prev) => ({ ...prev, address: e.target.value }))}
+                    placeholder="Enter school address"
+                  />
+                </Field>
+
+                <Field label="Phone">
+                  <input
+                    style={fieldInput}
+                    value={form.phone}
+                    onChange={(e) => setForm((prev) => ({ ...prev, phone: e.target.value }))}
+                    placeholder="Enter phone number"
+                  />
+                </Field>
+
+                <Field label="Email">
+                  <input
+                    style={fieldInput}
+                    value={form.email}
+                    onChange={(e) => setForm((prev) => ({ ...prev, email: e.target.value }))}
+                    placeholder="Enter school email"
+                  />
+                </Field>
+
+                <Field label="Principal Name" full>
+                  <input
+                    style={fieldInput}
+                    value={form.principal_name}
+                    onChange={(e) => setForm((prev) => ({ ...prev, principal_name: e.target.value }))}
+                    placeholder="Enter principal name"
+                  />
+                </Field>
+              </div>
+
+              <div style={sectionFooter}>
+                <button onClick={resetForm} style={btnSecondary} disabled={saving}>
+                  Reset Changes
+                </button>
+                <button onClick={() => void saveSettings()} style={btnPrimary} disabled={saving}>
+                  {saving ? "Saving..." : "Save School Info"}
+                </button>
+              </div>
+            </div>
           </section>
-        ) : (
-          <div style={contentGrid}>
+
+          <section style={rightColumn}>
             <section style={panel}>
               <div style={panelHeader}>
                 <div>
-                  <div style={panelTitle}>School Information</div>
-                  <div style={panelSub}>Core identity details used across the platform.</div>
+                  <div style={panelTitle}>Brand Assets</div>
+                  <div style={panelSub}>Upload your logo and signatures.</div>
                 </div>
               </div>
 
-              <div style={panelBody}>
-                <div style={infoTipCard}>
-                  <div style={infoTipTitle}>School Profile Tip</div>
-                  <div style={infoTipText}>
-                    These details power the header area on report cards, financial documents,
-                    and printable school records.
+              <div style={assetGrid}>
+                <AssetCard
+                  title="School Logo"
+                  subtitle="Shows on PDFs and school identity areas"
+                  imageUrl={resolvedLogoUrl}
+                  buttonLabel={uploadingKind === "logo" ? "Uploading..." : "Upload Logo"}
+                  onClick={() => logoInputRef.current?.click()}
+                  disabled={uploadingKind !== null}
+                  status={settings.logo_url ? "Ready" : "Missing"}
+                />
+
+                <AssetCard
+                  title="Principal Signature"
+                  subtitle="Used on report cards and official documents"
+                  imageUrl={resolvedPrincipalSignatureUrl}
+                  buttonLabel={uploadingKind === "principal_signature" ? "Uploading..." : "Upload Signature"}
+                  onClick={() => principalSigInputRef.current?.click()}
+                  disabled={uploadingKind !== null}
+                  status={settings.principal_signature_url ? "Ready" : "Missing"}
+                />
+
+                <AssetCard
+                  title="Teacher Signature"
+                  subtitle="Used on academic reports"
+                  imageUrl={resolvedTeacherSignatureUrl}
+                  buttonLabel={uploadingKind === "teacher_signature" ? "Uploading..." : "Upload Signature"}
+                  onClick={() => teacherSigInputRef.current?.click()}
+                  disabled={uploadingKind !== null}
+                  status={settings.teacher_signature_url ? "Ready" : "Missing"}
+                />
+              </div>
+
+              <input
+                ref={logoInputRef}
+                type="file"
+                accept=".png,.jpg,.jpeg,image/png,image/jpeg"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.currentTarget.value = "";
+                  if (!file) return;
+                  void uploadAsset("logo", file);
+                }}
+              />
+
+              <input
+                ref={principalSigInputRef}
+                type="file"
+                accept=".png,.jpg,.jpeg,image/png,image/jpeg"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.currentTarget.value = "";
+                  if (!file) return;
+                  void uploadAsset("principal_signature", file);
+                }}
+              />
+
+              <input
+                ref={teacherSigInputRef}
+                type="file"
+                accept=".png,.jpg,.jpeg,image/png,image/jpeg"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.currentTarget.value = "";
+                  if (!file) return;
+                  void uploadAsset("teacher_signature", file);
+                }}
+              />
+            </section>
+
+            <section style={panel}>
+              <div style={panelHeader}>
+                <div>
+                  <div style={panelTitle}>Live Preview</div>
+                  <div style={panelSub}>How your official documents will feel.</div>
+                </div>
+              </div>
+
+              <div style={previewCard}>
+                <div style={previewTop}>
+                  <div style={previewLogoWrap}>
+                    {resolvedLogoUrl ? (
+                      <img src={resolvedLogoUrl} alt="School logo" style={previewLogo} />
+                    ) : (
+                      <div style={previewLogoFallback}>LOGO</div>
+                    )}
+                  </div>
+
+                  <div style={{ flex: 1 }}>
+                    <div style={previewSchoolName}>{form.school_name || "Your School Name"}</div>
+                    <div style={previewMeta}>{form.address || "School address will appear here"}</div>
+                    <div style={previewMeta}>
+                      {form.phone || "Phone"} {form.email ? `• ${form.email}` : ""}
+                    </div>
                   </div>
                 </div>
 
-                <div style={formGrid}>
-                  <Field label="School Name" full>
-                    <input
-                      style={fieldInput}
-                      value={form.school_name}
-                      onChange={(e) => setForm((prev) => ({ ...prev, school_name: e.target.value }))}
-                      placeholder="Enter school name"
-                    />
-                  </Field>
+                <div style={previewDivider} />
 
-                  <Field label="Address" full>
-                    <textarea
-                      style={{ ...fieldInput, minHeight: 100, resize: "vertical" }}
-                      value={form.address}
-                      onChange={(e) => setForm((prev) => ({ ...prev, address: e.target.value }))}
-                      placeholder="Enter school address"
-                    />
-                  </Field>
-
-                  <Field label="Phone">
-                    <input
-                      style={fieldInput}
-                      value={form.phone}
-                      onChange={(e) => setForm((prev) => ({ ...prev, phone: e.target.value }))}
-                      placeholder="Enter phone number"
-                    />
-                  </Field>
-
-                  <Field label="Email">
-                    <input
-                      style={fieldInput}
-                      value={form.email}
-                      onChange={(e) => setForm((prev) => ({ ...prev, email: e.target.value }))}
-                      placeholder="Enter school email"
-                    />
-                  </Field>
-
-                  <Field label="Principal Name" full>
-                    <input
-                      style={fieldInput}
-                      value={form.principal_name}
-                      onChange={(e) => setForm((prev) => ({ ...prev, principal_name: e.target.value }))}
-                      placeholder="Enter principal name"
-                    />
-                  </Field>
+                <div style={previewDocTitle}>Official School Document</div>
+                <div style={previewText}>
+                  This preview reflects your report card and finance document header style.
+                  Add your logo and signatures to make all exports feel complete and premium.
                 </div>
 
-                <div style={sectionFooter}>
-                  <button onClick={resetForm} style={btnSecondary} disabled={saving}>
-                    Reset Changes
-                  </button>
-                  <button onClick={() => void saveSettings()} style={btnPrimary} disabled={saving}>
-                    {saving ? "Saving..." : "Save School Info"}
-                  </button>
+                <div style={signaturePreviewRow}>
+                  <SignaturePreview
+                    label="Teacher Signature"
+                    src={resolvedTeacherSignatureUrl}
+                  />
+                  <SignaturePreview
+                    label={form.principal_name || "Principal"}
+                    src={resolvedPrincipalSignatureUrl}
+                  />
                 </div>
               </div>
             </section>
 
-            <section style={rightColumn}>
-              <section style={panel}>
-                <div style={panelHeader}>
-                  <div>
-                    <div style={panelTitle}>Brand Assets</div>
-                    <div style={panelSub}>Upload your logo and signatures.</div>
-                  </div>
+            <section style={panel}>
+              <div style={panelHeader}>
+                <div>
+                  <div style={panelTitle}>Contact Snapshot</div>
+                  <div style={panelSub}>Quick view of the school’s public-facing details.</div>
                 </div>
+              </div>
 
-                <div style={assetGrid}>
-                  <AssetCard
-                    title="School Logo"
-                    subtitle="Shows on PDFs and school identity areas"
-                    imageUrl={settings?.logo_url || null}
-                    buttonLabel={uploadingKind === "logo" ? "Uploading..." : "Upload Logo"}
-                    onClick={() => logoInputRef.current?.click()}
-                    disabled={uploadingKind !== null}
-                    status={settings?.logo_url ? "Ready" : "Missing"}
-                  />
-
-                  <AssetCard
-                    title="Principal Signature"
-                    subtitle="Used on report cards and official documents"
-                    imageUrl={settings?.principal_signature_url || null}
-                    buttonLabel={uploadingKind === "principal_signature" ? "Uploading..." : "Upload Signature"}
-                    onClick={() => principalSigInputRef.current?.click()}
-                    disabled={uploadingKind !== null}
-                    status={settings?.principal_signature_url ? "Ready" : "Missing"}
-                  />
-
-                  <AssetCard
-                    title="Teacher Signature"
-                    subtitle="Used on academic reports"
-                    imageUrl={settings?.teacher_signature_url || null}
-                    buttonLabel={uploadingKind === "teacher_signature" ? "Uploading..." : "Upload Signature"}
-                    onClick={() => teacherSigInputRef.current?.click()}
-                    disabled={uploadingKind !== null}
-                    status={settings?.teacher_signature_url ? "Ready" : "Missing"}
-                  />
-                </div>
-
-                <input
-                  ref={logoInputRef}
-                  type="file"
-                  accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
-                  style={{ display: "none" }}
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    e.currentTarget.value = "";
-                    if (!file) return;
-                    void uploadAsset("logo", file);
-                  }}
-                />
-
-                <input
-                  ref={principalSigInputRef}
-                  type="file"
-                  accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
-                  style={{ display: "none" }}
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    e.currentTarget.value = "";
-                    if (!file) return;
-                    void uploadAsset("principal_signature", file);
-                  }}
-                />
-
-                <input
-                  ref={teacherSigInputRef}
-                  type="file"
-                  accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
-                  style={{ display: "none" }}
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    e.currentTarget.value = "";
-                    if (!file) return;
-                    void uploadAsset("teacher_signature", file);
-                  }}
-                />
-              </section>
-
-              <section style={panel}>
-                <div style={panelHeader}>
-                  <div>
-                    <div style={panelTitle}>Live Preview</div>
-                    <div style={panelSub}>How your official documents will feel.</div>
-                  </div>
-                </div>
-
-                <div style={previewCard}>
-                  <div style={previewTop}>
-                    <div style={previewLogoWrap}>
-                      {settings?.logo_url ? (
-                        <img src={settings.logo_url} alt="School logo" style={previewLogo} />
-                      ) : (
-                        <div style={previewLogoFallback}>LOGO</div>
-                      )}
-                    </div>
-
-                    <div style={{ flex: 1 }}>
-                      <div style={previewSchoolName}>{form.school_name || "Your School Name"}</div>
-                      <div style={previewMeta}>{form.address || "School address will appear here"}</div>
-                      <div style={previewMeta}>
-                        {form.phone || "Phone"} {form.email ? `• ${form.email}` : ""}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div style={previewDivider} />
-
-                  <div style={previewDocTitle}>Official School Document</div>
-                  <div style={previewText}>
-                    This preview reflects your report card and finance document header style.
-                    Add your logo and signatures to make all exports feel complete and premium.
-                  </div>
-
-                  <div style={signaturePreviewRow}>
-                    <SignaturePreview
-                      label="Teacher Signature"
-                      src={settings?.teacher_signature_url || null}
-                    />
-                    <SignaturePreview
-                      label={form.principal_name || "Principal"}
-                      src={settings?.principal_signature_url || null}
-                    />
-                  </div>
-                </div>
-              </section>
-
-              <section style={panel}>
-                <div style={panelHeader}>
-                  <div>
-                    <div style={panelTitle}>Contact Snapshot</div>
-                    <div style={panelSub}>Quick view of the school’s public-facing details.</div>
-                  </div>
-                </div>
-
-                <div style={snapshotGrid}>
-                  <SnapshotTile label="School Name" value={form.school_name || "--"} />
-                  <SnapshotTile label="Principal" value={form.principal_name || "--"} />
-                  <SnapshotTile label="Phone" value={form.phone || "--"} />
-                  <SnapshotTile label="Email" value={form.email || "--"} />
-                </div>
-              </section>
+              <div style={snapshotGrid}>
+                <SnapshotTile label="School Name" value={form.school_name || "--"} />
+                <SnapshotTile label="Principal" value={form.principal_name || "--"} />
+                <SnapshotTile label="Phone" value={form.phone || "--"} />
+                <SnapshotTile label="Email" value={form.email || "--"} />
+              </div>
             </section>
-          </div>
-        )}
+          </section>
+        </div>
       </div>
     </div>
   );
@@ -564,7 +626,7 @@ function AssetCard({
         <div style={{ flex: 1 }}>
           <div style={assetTitle}>{title}</div>
           <div style={assetSubtitle}>{subtitle}</div>
-          <div style={assetStatus(imageUrl ? true : false)}>{status}</div>
+          <div style={assetStatus(!!imageUrl)}>{status}</div>
         </div>
       </div>
 
@@ -678,7 +740,9 @@ function extractErr(e: unknown, fallback: string) {
   const data = err?.response?.data;
   if (typeof data === "string") return data;
   if (data && typeof data === "object") {
-    const msg = (data as { message?: string; error?: string }).message || (data as { error?: string }).error;
+    const msg =
+      (data as { message?: string; error?: string }).message ||
+      (data as { error?: string }).error;
     if (msg) return msg;
   }
   return err?.message || fallback;
@@ -1248,25 +1312,11 @@ const btnGhost: CSSProperties = {
   cursor: "pointer",
 };
 
-const errorAlert: CSSProperties = {
-  marginBottom: 16,
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(239,68,68,0.22)",
-  background: "rgba(127,29,29,0.24)",
-  color: "#fecaca",
-};
-
-const successAlert: CSSProperties = {
-  marginBottom: 16,
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(34,197,94,0.22)",
-  background: "rgba(20,83,45,0.24)",
-  color: "#bbf7d0",
-};
-
 const loadingBox: CSSProperties = {
   padding: 20,
   color: "#cbd5e1",
+};
+
+const inlineErrorWrap: CSSProperties = {
+  marginBottom: 16,
 };

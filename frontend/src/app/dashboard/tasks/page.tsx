@@ -3,6 +3,11 @@
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
+import { useToast } from "@/components/ui/ToastProvider";
+import LoadingState from "@/components/ui/LoadingState";
+import ErrorState from "@/components/ui/ErrorState";
+import EmptyState from "@/components/ui/EmptyState";
+import ConfirmModal from "@/components/ui/ConfirmModal";
 
 type Audience = "all" | "admin" | "teacher" | "parent" | "student";
 type TaskStatus = "Pending" | "In Progress" | "Done";
@@ -59,6 +64,8 @@ const STATUS_OPTIONS: TaskStatus[] = ["Pending", "In Progress", "Done"];
 const AUDIENCE_OPTIONS: Audience[] = ["all", "admin", "teacher", "parent", "student"];
 
 export default function TasksPage() {
+  const { showToast } = useToast();
+
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -78,6 +85,9 @@ export default function TasksPage() {
   const [editing, setEditing] = useState<Task | null>(null);
   const [form, setForm] = useState<TaskForm>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
+
+  const [deleteTarget, setDeleteTarget] = useState<Task | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   async function loadAll() {
     setLoading(true);
@@ -127,7 +137,12 @@ export default function TasksPage() {
   }, []);
 
   const teachers = useMemo(
-    () => users.filter((u) => (u.role || "").toLowerCase() === "teacher" || (u.role || "").toLowerCase() === "admin"),
+    () =>
+      users.filter(
+        (u) =>
+          (u.role || "").toLowerCase() === "teacher" ||
+          (u.role || "").toLowerCase() === "admin"
+      ),
     [users]
   );
 
@@ -195,6 +210,10 @@ export default function TasksPage() {
     return { total, pending, inProgress, done, overdue };
   }, [filteredTasks]);
 
+  const hasActiveFilters = Boolean(
+    query || statusFilter || audienceFilter || assigneeTypeFilter || dueFilter !== "all"
+  );
+
   function openCreate() {
     setMode("create");
     setEditing(null);
@@ -234,6 +253,7 @@ export default function TasksPage() {
 
   async function submit() {
     setFormError(null);
+
     const validation = validateForm(form);
     if (validation) {
       setFormError(validation);
@@ -252,6 +272,7 @@ export default function TasksPage() {
     };
 
     setBusy(true);
+    setErr(null);
 
     try {
       if (mode === "create") {
@@ -263,6 +284,8 @@ export default function TasksPage() {
         } else {
           await loadAll();
         }
+
+        showToast("Task created successfully.", "success");
       } else {
         if (!editing?.id) throw new Error("No task selected.");
 
@@ -274,32 +297,45 @@ export default function TasksPage() {
         } else {
           await loadAll();
         }
+
+        showToast("Task updated successfully.", "success");
       }
 
       setOpen(false);
     } catch (e: unknown) {
-      setFormError(extractErr(e, "Failed to save task."));
+      const message = extractErr(e, "Failed to save task.");
+      setFormError(message);
+      showToast(message, "error");
     } finally {
       setBusy(false);
     }
   }
 
-  async function removeTask(task: Task) {
-    const ok = window.confirm(`Delete "${task.title}"?`);
-    if (!ok) return;
+  function requestRemoveTask(task: Task) {
+    setDeleteTarget(task);
+  }
 
+  async function confirmRemoveTask() {
+    if (!deleteTarget) return;
+
+    setDeleteBusy(true);
     setBusy(true);
     setErr(null);
 
     const previous = tasks;
-    setTasks((curr) => curr.filter((x) => x.id !== task.id));
+    setTasks((curr) => curr.filter((x) => x.id !== deleteTarget.id));
 
     try {
-      await api.delete(`/tasks/${task.id}`);
+      await api.delete(`/tasks/${deleteTarget.id}`);
+      showToast("Task deleted.", "success");
+      setDeleteTarget(null);
     } catch (e: unknown) {
       setTasks(previous);
-      setErr(extractErr(e, "Failed to delete task."));
+      const message = extractErr(e, "Failed to delete task.");
+      setErr(message);
+      showToast(message, "error");
     } finally {
+      setDeleteBusy(false);
       setBusy(false);
     }
   }
@@ -307,12 +343,16 @@ export default function TasksPage() {
   async function quickStatusUpdate(task: Task, nextStatus: TaskStatus) {
     const previous = tasks;
     setTasks((curr) => curr.map((x) => (x.id === task.id ? { ...x, status: nextStatus } : x)));
+    setErr(null);
 
     try {
       await api.put(`/tasks/${task.id}`, { status: nextStatus });
+      showToast(`Task marked ${nextStatus}.`, "success");
     } catch (e: unknown) {
       setTasks(previous);
-      setErr(extractErr(e, "Failed to update task status."));
+      const message = extractErr(e, "Failed to update task status.");
+      setErr(message);
+      showToast(message, "error");
     }
   }
 
@@ -321,6 +361,26 @@ export default function TasksPage() {
     if (form.assignee_type === "teacher") return teachers;
     return [];
   }, [form.assignee_type, students, teachers]);
+
+  if (loading) {
+    return (
+      <div style={pageShell}>
+        <div style={page}>
+          <LoadingState text="Loading tasks..." />
+        </div>
+      </div>
+    );
+  }
+
+  if (err && tasks.length === 0 && students.length === 0) {
+    return (
+      <div style={pageShell}>
+        <div style={page}>
+          <ErrorState text={err} onRetry={() => void loadAll()} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={pageShell}>
@@ -407,6 +467,7 @@ export default function TasksPage() {
                 setAudienceFilter("");
                 setAssigneeTypeFilter("");
                 setDueFilter("all");
+                setErr(null);
               }}
               disabled={busy}
             >
@@ -415,27 +476,63 @@ export default function TasksPage() {
           </div>
         </section>
 
-        {err && (
-          <div style={alertBox}>
-            <strong style={{ marginRight: 8 }}>Error:</strong>
-            {err}
+        {hasActiveFilters && (
+          <div style={chipBar}>
+            {query.trim() ? <ActiveChip label={`Search: ${query.trim()}`} onRemove={() => setQuery("")} /> : null}
+            {statusFilter ? <ActiveChip label={`Status: ${statusFilter}`} onRemove={() => setStatusFilter("")} /> : null}
+            {audienceFilter ? <ActiveChip label={`Audience: ${labelAudience(audienceFilter)}`} onRemove={() => setAudienceFilter("")} /> : null}
+            {assigneeTypeFilter ? (
+              <ActiveChip
+                label={`Assignee: ${capitalize(assigneeTypeFilter)}`}
+                onRemove={() => setAssigneeTypeFilter("")}
+              />
+            ) : null}
+            {dueFilter !== "all" ? (
+              <ActiveChip label={`Due: ${capitalize(dueFilter)}`} onRemove={() => setDueFilter("all")} />
+            ) : null}
           </div>
         )}
+
+        {err ? (
+          <div style={inlineErrorWrap}>
+            <ErrorState text={err} onRetry={() => void loadAll()} />
+          </div>
+        ) : null}
 
         <section style={panel}>
           <div style={panelHeader}>
             <div>
               <div style={panelTitle}>Task Board</div>
-              <div style={panelSub}>
-                {loading ? "Loading tasks..." : `${filteredTasks.length} task(s) shown`}
-              </div>
+              <div style={panelSub}>{`${filteredTasks.length} task(s) shown`}</div>
             </div>
           </div>
 
-          {loading ? (
-            <div style={emptyState}>Loading tasks...</div>
-          ) : filteredTasks.length === 0 ? (
-            <div style={emptyState}>No tasks found for the current filters.</div>
+          {filteredTasks.length === 0 ? (
+            <div style={emptyStateWrap}>
+              <EmptyState
+                title="No tasks found"
+                text="No tasks match the current filters."
+                action={
+                  <div style={emptyStateActions}>
+                    <button
+                      style={btnSecondary}
+                      onClick={() => {
+                        setQuery("");
+                        setStatusFilter("");
+                        setAudienceFilter("");
+                        setAssigneeTypeFilter("");
+                        setDueFilter("all");
+                      }}
+                    >
+                      Clear Filters
+                    </button>
+                    <button style={btnPrimary} onClick={openCreate}>
+                      + New Task
+                    </button>
+                  </div>
+                }
+              />
+            </div>
           ) : (
             <div style={taskGrid}>
               {filteredTasks
@@ -508,7 +605,7 @@ export default function TasksPage() {
                         <button style={miniButton} onClick={() => openEdit(task)} disabled={busy}>
                           Edit
                         </button>
-                        <button style={miniDanger} onClick={() => void removeTask(task)} disabled={busy}>
+                        <button style={miniDanger} onClick={() => requestRemoveTask(task)} disabled={busy}>
                           Delete
                         </button>
                       </div>
@@ -521,7 +618,11 @@ export default function TasksPage() {
 
         {open && (
           <Modal title={mode === "create" ? "Create Task" : "Edit Task"} onClose={closeModal}>
-            {formError && <div style={{ ...alertBox, marginTop: 0 }}>{formError}</div>}
+            {formError ? (
+              <div style={{ marginBottom: 12 }}>
+                <ErrorState text={formError} />
+              </div>
+            ) : null}
 
             <div style={modalGrid}>
               <Field label="Title" full>
@@ -671,6 +772,25 @@ export default function TasksPage() {
             </div>
           </Modal>
         )}
+
+        <ConfirmModal
+          open={!!deleteTarget}
+          title="Delete task"
+          message={
+            deleteTarget
+              ? `Delete "${deleteTarget.title}"?`
+              : ""
+          }
+          confirmText="Delete"
+          cancelText="Cancel"
+          danger
+          busy={deleteBusy}
+          onConfirm={() => void confirmRemoveTask()}
+          onCancel={() => {
+            if (deleteBusy) return;
+            setDeleteTarget(null);
+          }}
+        />
       </div>
     </div>
   );
@@ -706,6 +826,17 @@ function Meta({ label, value }: { label: string; value: string }) {
     <div style={metaBox}>
       <div style={metaLabel}>{label}</div>
       <div style={metaValue}>{value}</div>
+    </div>
+  );
+}
+
+function ActiveChip({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return (
+    <div style={activeChip}>
+      <span>{label}</span>
+      <button onClick={onRemove} style={activeChipBtn}>
+        ✕
+      </button>
     </div>
   );
 }
@@ -1056,9 +1187,16 @@ const panelSub: CSSProperties = {
   color: "#94a3b8",
 };
 
-const emptyState: CSSProperties = {
+const emptyStateWrap: CSSProperties = {
   padding: 20,
-  color: "#cbd5e1",
+};
+
+const emptyStateActions: CSSProperties = {
+  display: "flex",
+  justifyContent: "center",
+  gap: 10,
+  flexWrap: "wrap",
+  marginTop: 18,
 };
 
 const taskGrid: CSSProperties = {
@@ -1209,15 +1347,6 @@ const miniDanger: CSSProperties = {
   cursor: "pointer",
 };
 
-const alertBox: CSSProperties = {
-  marginBottom: 16,
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(239,68,68,0.22)",
-  background: "rgba(127,29,29,0.24)",
-  color: "#fecaca",
-};
-
 const modalHeader: CSSProperties = {
   padding: "14px 16px",
   borderBottom: "1px solid rgba(255,255,255,0.08)",
@@ -1347,6 +1476,41 @@ const overduePill: CSSProperties = {
   background: "rgba(239,68,68,0.14)",
   color: "#fecaca",
   border: "1px solid rgba(239,68,68,0.28)",
+};
+
+const chipBar: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  flexWrap: "wrap",
+  marginBottom: 16,
+};
+
+const activeChip: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "8px 10px",
+  borderRadius: 999,
+  border: "1px solid rgba(96,165,250,0.22)",
+  background: "rgba(96,165,250,0.12)",
+  color: "#dbeafe",
+  fontSize: 12,
+  fontWeight: 800,
+};
+
+const activeChipBtn: CSSProperties = {
+  width: 22,
+  height: 22,
+  borderRadius: 999,
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "rgba(255,255,255,0.08)",
+  color: "#fff",
+  cursor: "pointer",
+  fontWeight: 900,
+};
+
+const inlineErrorWrap: CSSProperties = {
+  marginBottom: 16,
 };
 
 function statusPill(tone: { bg: string; text: string; border: string }): CSSProperties {

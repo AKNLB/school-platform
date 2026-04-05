@@ -3,6 +3,11 @@
 import type { CSSProperties } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
+import { useToast } from "@/components/ui/ToastProvider";
+import LoadingState from "@/components/ui/LoadingState";
+import ErrorState from "@/components/ui/ErrorState";
+import EmptyState from "@/components/ui/EmptyState";
+import ConfirmModal from "@/components/ui/ConfirmModal";
 
 type Student = {
   id: number;
@@ -40,11 +45,12 @@ type RowState = {
 const STATUS_OPTIONS: AttendanceStatus[] = ["present", "absent", "late", "excused"];
 
 export default function AttendancePage() {
+  const { showToast } = useToast();
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
 
   const [students, setStudents] = useState<Student[]>([]);
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
@@ -57,10 +63,11 @@ export default function AttendancePage() {
   const [notesOnly, setNotesOnly] = useState(false);
   const [sortBy, setSortBy] = useState<"name" | "grade" | "status">("name");
 
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+
   async function loadAll(showRefresh = false) {
     try {
       setError(null);
-      setSuccess(null);
 
       if (showRefresh) setRefreshing(true);
       else setLoading(true);
@@ -105,6 +112,10 @@ export default function AttendancePage() {
       });
 
       setRows(mapped);
+
+      if (showRefresh) {
+        showToast("Attendance refreshed.", "info");
+      }
     } catch (e: unknown) {
       setError(extractErr(e, "Failed to load attendance data"));
       setStudents([]);
@@ -204,6 +215,7 @@ export default function AttendancePage() {
 
   function markAll(status: AttendanceStatus) {
     setRows((prev) => prev.map((row) => ({ ...row, status })));
+    showToast(`All visible records set to ${capitalize(status)}.`, "info");
   }
 
   function clearSecondaryFilters() {
@@ -221,7 +233,8 @@ export default function AttendancePage() {
         note: row.originalNote,
       }))
     );
-    setSuccess("Unsaved changes reset.");
+    setResetConfirmOpen(false);
+    showToast("Unsaved changes reset.", "info");
     setError(null);
   }
 
@@ -229,7 +242,6 @@ export default function AttendancePage() {
     try {
       setSaving(true);
       setError(null);
-      setSuccess(null);
 
       const payload = rows.map((row) => ({
         student_id: row.student_id,
@@ -241,12 +253,34 @@ export default function AttendancePage() {
       await api.put("/attendance", payload);
 
       await loadAll(true);
-      setSuccess("Attendance saved successfully.");
+      showToast("Attendance saved successfully.", "success");
     } catch (e: unknown) {
-      setError(extractErr(e, "Failed to save attendance"));
+      const message = extractErr(e, "Failed to save attendance");
+      setError(message);
+      showToast(message, "error");
     } finally {
       setSaving(false);
     }
+  }
+
+  if (loading) {
+    return (
+      <div style={pageShell}>
+        <div style={page}>
+          <LoadingState text="Loading attendance..." />
+        </div>
+      </div>
+    );
+  }
+
+  if (error && students.length === 0 && rows.length === 0) {
+    return (
+      <div style={pageShell}>
+        <div style={page}>
+          <ErrorState text={error} onRetry={() => void loadAll()} />
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -282,7 +316,7 @@ export default function AttendancePage() {
               </button>
 
               <button
-                onClick={resetAllChanges}
+                onClick={() => setResetConfirmOpen(true)}
                 style={btnSecondary}
                 disabled={loading || saving || stats.changed === 0}
               >
@@ -448,19 +482,11 @@ export default function AttendancePage() {
           </div>
         )}
 
-        {error && (
-          <div style={alertBox}>
-            <strong style={{ marginRight: 8 }}>Error:</strong>
-            {error}
+        {error ? (
+          <div style={inlineErrorWrap}>
+            <ErrorState text={error} onRetry={() => void loadAll()} />
           </div>
-        )}
-
-        {success && (
-          <div style={successBox}>
-            <strong style={{ marginRight: 8 }}>Success:</strong>
-            {success}
-          </div>
-        )}
+        ) : null}
 
         <section style={panel}>
           <div style={panelHeader}>
@@ -468,9 +494,7 @@ export default function AttendancePage() {
               <div>
                 <div style={panelTitle}>Daily Attendance Register</div>
                 <div style={panelSubtitle}>
-                  {loading
-                    ? "Loading attendance..."
-                    : `${filteredRows.length} student(s) shown for ${selectedDate}`}
+                  {`${filteredRows.length} student(s) shown for ${selectedDate}`}
                 </div>
               </div>
 
@@ -480,18 +504,19 @@ export default function AttendancePage() {
             </div>
           </div>
 
-          {loading ? (
-            <div style={emptyState}>
-              <div style={emptyStateTitle}>Loading attendance...</div>
-              <div style={emptyStateText}>Please wait while student records are prepared.</div>
-            </div>
-          ) : filteredRows.length === 0 ? (
-            <div style={emptyState}>
-              <div style={emptyStateIcon}>🗂️</div>
-              <div style={emptyStateTitle}>No students found</div>
-              <div style={emptyStateText}>
-                Try another grade filter, clear the search, or add students first.
-              </div>
+          {filteredRows.length === 0 ? (
+            <div style={emptyStateWrap}>
+              <EmptyState
+                title="No students found"
+                text="Try another grade filter, clear the search, or add students first."
+                action={
+                  <div style={emptyActions}>
+                    <button onClick={clearSecondaryFilters} style={btnSecondary}>
+                      Clear Filters
+                    </button>
+                  </div>
+                }
+              />
             </div>
           ) : (
             <div style={tableWrap}>
@@ -604,6 +629,21 @@ export default function AttendancePage() {
             </div>
           )}
         </section>
+
+        <ConfirmModal
+          open={resetConfirmOpen}
+          title="Reset attendance changes"
+          message="Discard all unsaved attendance changes and revert to the last loaded values?"
+          confirmText="Reset"
+          cancelText="Cancel"
+          danger
+          busy={saving}
+          onConfirm={resetAllChanges}
+          onCancel={() => {
+            if (saving) return;
+            setResetConfirmOpen(false);
+          }}
+        />
       </div>
     </div>
   );
@@ -1089,24 +1129,6 @@ const activeChipBtn: CSSProperties = {
   fontWeight: 900,
 };
 
-const alertBox: CSSProperties = {
-  marginBottom: 16,
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(239,68,68,0.35)",
-  background: "rgba(239,68,68,0.12)",
-  color: "#fee2e2",
-};
-
-const successBox: CSSProperties = {
-  marginBottom: 16,
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(34,197,94,0.28)",
-  background: "rgba(34,197,94,0.12)",
-  color: "#dcfce7",
-};
-
 const panel: CSSProperties = {
   marginTop: 16,
   borderRadius: 18,
@@ -1151,26 +1173,16 @@ const resultPill: CSSProperties = {
   fontWeight: 800,
 };
 
-const emptyState: CSSProperties = {
+const emptyStateWrap: CSSProperties = {
   padding: 28,
-  textAlign: "center",
-  color: "#cbd5e1",
 };
 
-const emptyStateIcon: CSSProperties = {
-  fontSize: 34,
-};
-
-const emptyStateTitle: CSSProperties = {
-  fontSize: 18,
-  fontWeight: 900,
-  color: "#ffffff",
-};
-
-const emptyStateText: CSSProperties = {
-  marginTop: 8,
-  fontSize: 14,
-  opacity: 0.82,
+const emptyActions: CSSProperties = {
+  display: "flex",
+  justifyContent: "center",
+  gap: 10,
+  flexWrap: "wrap",
+  marginTop: 18,
 };
 
 const tableWrap: CSSProperties = {
@@ -1302,4 +1314,8 @@ const noteInput: CSSProperties = {
   background: "rgba(15,23,42,0.82)",
   color: "#fff",
   outline: "none",
+};
+
+const inlineErrorWrap: CSSProperties = {
+  marginBottom: 16,
 };

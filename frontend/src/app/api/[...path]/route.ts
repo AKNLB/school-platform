@@ -31,6 +31,11 @@ export async function DELETE(req: NextRequest, context: RouteContext) {
   return proxy(req, path);
 }
 
+export async function OPTIONS(req: NextRequest, context: RouteContext) {
+  const { path } = await context.params;
+  return proxy(req, path);
+}
+
 async function proxy(req: NextRequest, pathParts: string[]) {
   const origin = process.env.BACKEND_ORIGIN;
   if (!origin) {
@@ -41,7 +46,9 @@ async function proxy(req: NextRequest, pathParts: string[]) {
   }
 
   const url = new URL(req.url);
-  const target = `${origin}/${pathParts.join("/")}${url.search}`;
+
+  // Important: preserve the backend's /api prefix
+  const target = `${origin}/api/${pathParts.join("/")}${url.search}`;
 
   const headers = new Headers(req.headers);
   headers.delete("host");
@@ -49,9 +56,10 @@ async function proxy(req: NextRequest, pathParts: string[]) {
   const res = await fetch(target, {
     method: req.method,
     headers,
-    body: ["GET", "HEAD"].includes(req.method)
-      ? undefined
-      : await req.arrayBuffer(),
+    body:
+      req.method === "GET" || req.method === "HEAD"
+        ? undefined
+        : await req.arrayBuffer(),
     redirect: "manual",
   });
 

@@ -3,6 +3,9 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { fetchMe, type AuthedUser } from "@/lib/auth";
+import LoadingState from "@/components/ui/LoadingState";
+import ErrorState from "@/components/ui/ErrorState";
+import EmptyState from "@/components/ui/EmptyState";
 
 type ModuleItem = {
   title: string;
@@ -12,6 +15,7 @@ type ModuleItem = {
   accent?: string;
   category: "Academic" | "Administration" | "Communication" | "Operations";
   priority?: boolean;
+  adminOnly?: boolean;
 };
 
 const modules: ModuleItem[] = [
@@ -92,6 +96,16 @@ const modules: ModuleItem[] = [
     category: "Administration",
   },
   {
+    title: "Admin Users",
+    href: "/dashboard/admin/users",
+    desc: "Create users, manage roles, activate accounts, and reset passwords.",
+    icon: "👥",
+    accent: "linear-gradient(135deg, #475569, #94a3b8)",
+    category: "Administration",
+    priority: true,
+    adminOnly: true,
+  },
+  {
     title: "Tasks",
     href: "/dashboard/tasks",
     desc: "Track assignments, workflows, and admin tasks.",
@@ -101,21 +115,51 @@ const modules: ModuleItem[] = [
   },
 ];
 
-const quickLinks = [
-  { label: "Create announcement", href: "/dashboard/announcements", icon: "📢" },
-  { label: "Open finance", href: "/dashboard/finance", icon: "💳" },
-  { label: "Manage report cards", href: "/dashboard/report-cards", icon: "🧾" },
-  { label: "Update settings", href: "/dashboard/settings", icon: "⚙️" },
-];
-
 export default function DashboardPage() {
   const [user, setUser] = useState<AuthedUser>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("All");
 
+  async function loadMe() {
+    try {
+      setAuthLoading(true);
+      setAuthError(null);
+      const who = await fetchMe();
+      setUser(who);
+    } catch (e: unknown) {
+      setAuthError(extractErr(e, "Failed to load dashboard access."));
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
   useEffect(() => {
-    fetchMe().then(setUser);
+    void loadMe();
   }, []);
+
+  const isAdmin = user?.role === "admin";
+
+  const visibleModules = useMemo(() => {
+    return modules.filter((m) => !m.adminOnly || isAdmin);
+  }, [isAdmin]);
+
+  const quickLinks = useMemo(() => {
+    const base = [
+      { label: "Create announcement", href: "/dashboard/announcements", icon: "📢" },
+      { label: "Open finance", href: "/dashboard/finance", icon: "💳" },
+      { label: "Manage report cards", href: "/dashboard/report-cards", icon: "🧾" },
+      { label: "Update settings", href: "/dashboard/settings", icon: "⚙️" },
+    ];
+
+    if (isAdmin) {
+      base.unshift({ label: "Manage users", href: "/dashboard/admin/users", icon: "👥" });
+    }
+
+    return base;
+  }, [isAdmin]);
 
   const greetingName = useMemo(() => {
     if (user?.email) return user.email.split("@")[0];
@@ -127,18 +171,18 @@ export default function DashboardPage() {
     return user.role.charAt(0).toUpperCase() + user.role.slice(1);
   }, [user]);
 
-  const totalModules = modules.length;
+  const totalModules = visibleModules.length;
 
   const featuredModules = useMemo(() => {
-    return modules.filter((m) => m.priority).slice(0, 4);
-  }, []);
+    return visibleModules.filter((m) => m.priority).slice(0, 4);
+  }, [visibleModules]);
 
   const categories = useMemo(() => {
-    return ["All", ...Array.from(new Set(modules.map((m) => m.category)))];
-  }, []);
+    return ["All", ...Array.from(new Set(visibleModules.map((m) => m.category)))];
+  }, [visibleModules]);
 
   const filteredModules = useMemo(() => {
-    return modules.filter((module) => {
+    return visibleModules.filter((module) => {
       const matchesSearch =
         module.title.toLowerCase().includes(search.toLowerCase()) ||
         module.desc.toLowerCase().includes(search.toLowerCase()) ||
@@ -148,17 +192,40 @@ export default function DashboardPage() {
 
       return matchesSearch && matchesCategory;
     });
-  }, [search, categoryFilter]);
+  }, [search, categoryFilter, visibleModules]);
 
-  const academicCount = modules.filter((m) => m.category === "Academic").length;
-  const adminCount = modules.filter((m) => m.category === "Administration").length;
-  const opsCount = modules.filter((m) => m.category === "Operations").length;
-  const commsCount = modules.filter((m) => m.category === "Communication").length;
+  const academicCount = visibleModules.filter((m) => m.category === "Academic").length;
+  const adminCount = visibleModules.filter((m) => m.category === "Administration").length;
+  const opsCount = visibleModules.filter((m) => m.category === "Operations").length;
+  const commsCount = visibleModules.filter((m) => m.category === "Communication").length;
 
   const topFocus = useMemo(() => {
-    const priorities = modules.filter((m) => m.priority);
-    return priorities.slice(0, 3);
-  }, []);
+    return visibleModules.filter((m) => m.priority).slice(0, 3);
+  }, [visibleModules]);
+
+  if (authLoading) {
+    return (
+      <main style={styles.page}>
+        <div style={styles.bgGlowOne} />
+        <div style={styles.bgGlowTwo} />
+        <div style={styles.container}>
+          <LoadingState text="Loading dashboard..." />
+        </div>
+      </main>
+    );
+  }
+
+  if (authError) {
+    return (
+      <main style={styles.page}>
+        <div style={styles.bgGlowOne} />
+        <div style={styles.bgGlowTwo} />
+        <div style={styles.container}>
+          <ErrorState text={authError} onRetry={() => void loadMe()} />
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main style={styles.page}>
@@ -185,6 +252,11 @@ export default function DashboardPage() {
               <Link href="/dashboard/settings" style={styles.secondaryAction}>
                 Open Settings
               </Link>
+              {isAdmin ? (
+                <Link href="/dashboard/admin/users" style={styles.secondaryAction}>
+                  Open Admin Users
+                </Link>
+              ) : null}
             </div>
 
             <div style={styles.heroPills}>
@@ -359,13 +431,10 @@ export default function DashboardPage() {
               </div>
 
               {filteredModules.length === 0 ? (
-                <div style={styles.emptyState}>
-                  <div style={styles.emptyIcon}>🔎</div>
-                  <div style={styles.emptyTitle}>No modules found</div>
-                  <div style={styles.emptyText}>
-                    Try another search term or switch to a different category.
-                  </div>
-                </div>
+                <EmptyState
+                  title="No modules found"
+                  text="Try another search term or switch to a different category."
+                />
               ) : (
                 <div style={styles.moduleGrid}>
                   {filteredModules.map((module) => (
@@ -555,6 +624,11 @@ function SnapshotRow({
       <span style={styles.snapshotValue}>{value}</span>
     </div>
   );
+}
+
+function extractErr(e: unknown, fallback: string) {
+  const err = e as { message?: string };
+  return err?.message || fallback;
 }
 
 const styles: Record<string, React.CSSProperties> = {
@@ -1067,32 +1141,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 13,
     fontWeight: 800,
     color: "#ffffff",
-  },
-
-  emptyState: {
-    padding: "38px 20px",
-    borderRadius: 20,
-    border: "1px solid rgba(255,255,255,0.08)",
-    background: "rgba(15,23,42,0.72)",
-    textAlign: "center",
-  },
-
-  emptyIcon: {
-    fontSize: 34,
-  },
-
-  emptyTitle: {
-    marginTop: 12,
-    fontSize: 22,
-    fontWeight: 900,
-    color: "#fff",
-  },
-
-  emptyText: {
-    marginTop: 8,
-    fontSize: 14,
-    color: "#94a3b8",
-    lineHeight: 1.6,
   },
 
   moduleGrid: {

@@ -3,6 +3,11 @@
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
+import { useToast } from "@/components/ui/ToastProvider";
+import LoadingState from "@/components/ui/LoadingState";
+import ErrorState from "@/components/ui/ErrorState";
+import EmptyState from "@/components/ui/EmptyState";
+import ConfirmModal from "@/components/ui/ConfirmModal";
 
 type Audience = "all" | "teachers" | "parents" | "students";
 type SortValue = "newest" | "oldest" | "title" | "audience";
@@ -38,10 +43,11 @@ const emptyForm: Upsert = {
 };
 
 export default function AnnouncementsPage() {
+  const { showToast } = useToast();
+
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
 
   const [audience, setAudience] = useState<Audience | "">("");
   const [pinnedOnly, setPinnedOnly] = useState(false);
@@ -56,6 +62,9 @@ export default function AnnouncementsPage() {
   const [form, setForm] = useState<Upsert>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
 
+  const [deleteTarget, setDeleteTarget] = useState<Announcement | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
   async function load() {
     setLoading(true);
     setErr(null);
@@ -68,7 +77,8 @@ export default function AnnouncementsPage() {
       const res = await api.get("/announcements", { params });
       setItems(Array.isArray(res.data) ? res.data : []);
     } catch (e: unknown) {
-      setErr(extractErr(e, "Failed to load announcements"));
+      const message = extractErr(e, "Failed to load announcements");
+      setErr(message);
       setItems([]);
     } finally {
       setLoading(false);
@@ -165,6 +175,7 @@ export default function AnnouncementsPage() {
     setPinnedOnly(false);
     setQ("");
     setSortBy("newest");
+    setErr(null);
   }
 
   function validate(p: Upsert): string | null {
@@ -178,7 +189,6 @@ export default function AnnouncementsPage() {
   async function submit() {
     setFormError(null);
     setErr(null);
-    setSuccess(null);
 
     const v = validate(form);
     if (v) {
@@ -199,7 +209,7 @@ export default function AnnouncementsPage() {
           await load();
         }
 
-        setSuccess("Announcement created successfully.");
+        showToast("Announcement created successfully.", "success");
       } else {
         if (!editing?.id) throw new Error("No announcement selected.");
 
@@ -212,35 +222,44 @@ export default function AnnouncementsPage() {
           await load();
         }
 
-        setSuccess("Announcement updated successfully.");
+        showToast("Announcement updated successfully.", "success");
       }
 
       setOpen(false);
     } catch (e: unknown) {
-      setFormError(extractErr(e, "Save failed"));
+      const message = extractErr(e, "Save failed");
+      setFormError(message);
+      showToast(message, "error");
     } finally {
       setBusy(false);
     }
   }
 
-  async function remove(a: Announcement) {
-    const ok = window.confirm(`Delete "${a.title}"? This cannot be undone.`);
-    if (!ok) return;
+  function requestRemove(a: Announcement) {
+    setDeleteTarget(a);
+  }
 
+  async function confirmRemove() {
+    if (!deleteTarget) return;
+
+    setDeleteBusy(true);
     setBusy(true);
     setErr(null);
-    setSuccess(null);
 
     const prev = items;
-    setItems((p) => p.filter((x) => x.id !== a.id));
+    setItems((p) => p.filter((x) => x.id !== deleteTarget.id));
 
     try {
-      await api.delete(`/announcements/${a.id}`);
-      setSuccess("Announcement deleted.");
+      await api.delete(`/announcements/${deleteTarget.id}`);
+      showToast("Announcement deleted.", "success");
+      setDeleteTarget(null);
     } catch (e: unknown) {
       setItems(prev);
-      setErr(extractErr(e, "Delete failed"));
+      const message = extractErr(e, "Delete failed");
+      setErr(message);
+      showToast(message, "error");
     } finally {
+      setDeleteBusy(false);
       setBusy(false);
     }
   }
@@ -248,15 +267,12 @@ export default function AnnouncementsPage() {
   async function uploadAttachment(a: Announcement, file: File) {
     setBusy(true);
     setErr(null);
-    setSuccess(null);
 
     try {
       const fd = new FormData();
       fd.append("file", file);
 
-      const res = await api.post(`/announcements/${a.id}/attachments`, fd, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      const res = await api.post(`/announcements/${a.id}/attachments`, fd);
 
       const updated = isAnnouncement(res?.data) ? res.data : null;
       if (updated?.id) {
@@ -265,21 +281,19 @@ export default function AnnouncementsPage() {
         await load();
       }
 
-      setSuccess("Attachment uploaded.");
+      showToast("Attachment uploaded.", "success");
     } catch (e: unknown) {
-      setErr(extractErr(e, "Upload failed"));
+      const message = extractErr(e, "Upload failed");
+      setErr(message);
+      showToast(message, "error");
     } finally {
       setBusy(false);
     }
   }
 
   async function deleteAttachment(a: Announcement, filename: string) {
-    const ok = window.confirm("Remove this attachment?");
-    if (!ok) return;
-
     setBusy(true);
     setErr(null);
-    setSuccess(null);
 
     try {
       const res = await api.delete(`/announcements/${a.id}/attachments/${encodeURIComponent(filename)}`);
@@ -291,9 +305,11 @@ export default function AnnouncementsPage() {
         await load();
       }
 
-      setSuccess("Attachment removed.");
+      showToast("Attachment removed.", "success");
     } catch (e: unknown) {
-      setErr(extractErr(e, "Remove attachment failed"));
+      const message = extractErr(e, "Remove attachment failed");
+      setErr(message);
+      showToast(message, "error");
     } finally {
       setBusy(false);
     }
@@ -302,7 +318,6 @@ export default function AnnouncementsPage() {
   async function quickTogglePinned(a: Announcement) {
     setBusy(true);
     setErr(null);
-    setSuccess(null);
 
     const prev = items;
     const nextPinned = !a.pinned;
@@ -324,10 +339,12 @@ export default function AnnouncementsPage() {
         setItems((current) => current.map((x) => (x.id === updated.id ? updated : x)));
       }
 
-      setSuccess(nextPinned ? "Announcement pinned." : "Announcement unpinned.");
+      showToast(nextPinned ? "Announcement pinned." : "Announcement unpinned.", "success");
     } catch (e: unknown) {
       setItems(prev);
-      setErr(extractErr(e, "Pin update failed"));
+      const message = extractErr(e, "Pin update failed");
+      setErr(message);
+      showToast(message, "error");
     } finally {
       setBusy(false);
     }
@@ -427,7 +444,7 @@ export default function AnnouncementsPage() {
             <button style={btnSecondary} onClick={() => openEdit(a)} disabled={busy}>
               Edit
             </button>
-            <button style={btnDanger} onClick={() => void remove(a)} disabled={busy}>
+            <button style={btnDanger} onClick={() => requestRemove(a)} disabled={busy}>
               Delete
             </button>
           </div>
@@ -437,6 +454,26 @@ export default function AnnouncementsPage() {
   }
 
   const messageLength = form.description.trim().length;
+
+  if (loading) {
+    return (
+      <div style={pageShell}>
+        <div style={page}>
+          <LoadingState text="Loading announcements..." />
+        </div>
+      </div>
+    );
+  }
+
+  if (err && items.length === 0) {
+    return (
+      <div style={pageShell}>
+        <div style={page}>
+          <ErrorState text={err} onRetry={() => void load()} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={pageShell}>
@@ -580,64 +617,40 @@ export default function AnnouncementsPage() {
           </div>
         )}
 
-        {err && (
-          <div style={alertError}>
-            <b style={{ marginRight: 8 }}>Error:</b>
-            {err}
-            <button
-              onClick={() => void load()}
-              style={{ ...btnSecondary, marginLeft: 12 }}
-              disabled={busy}
-            >
-              Retry
-            </button>
+        {err ? (
+          <div style={inlineErrorWrap}>
+            <ErrorState text={err} onRetry={() => void load()} />
           </div>
-        )}
-
-        {success && (
-          <div style={alertSuccess}>
-            <b style={{ marginRight: 8 }}>Success:</b>
-            {success}
-          </div>
-        )}
+        ) : null}
 
         <section style={panel}>
           <div style={panelHeader}>
             <div style={panelHeaderTop}>
               <div>
                 <div style={panelTitle}>Announcement Feed</div>
-                <div style={panelSubtitle}>
-                  {loading ? "Loading..." : `${filtered.length} result(s) shown`}
-                </div>
+                <div style={panelSubtitle}>{`${filtered.length} result(s) shown`}</div>
               </div>
 
-              <div style={resultPill}>
-                {filtered.length} visible
-              </div>
+              <div style={resultPill}>{filtered.length} visible</div>
             </div>
           </div>
 
-          {loading ? (
-            <div style={emptyState}>
-              <div style={emptyStateTitle}>Loading announcements...</div>
-              <div style={emptyStateText}>Please wait while updates are being pulled in.</div>
-            </div>
-          ) : filtered.length === 0 ? (
-            <div style={emptyState}>
-              <div style={emptyStateIcon}>📣</div>
-              <div style={emptyStateTitle}>No announcements found</div>
-              <div style={emptyStateText}>
-                Try changing filters, clearing the search, or creating a new update for your school community.
-              </div>
-
-              <div style={emptyStateActions}>
-                <button onClick={() => clearFilters()} style={btnSecondary}>
-                  Clear Filters
-                </button>
-                <button onClick={() => openCreate()} style={btnPrimary}>
-                  + New Announcement
-                </button>
-              </div>
+          {filtered.length === 0 ? (
+            <div style={emptyStateWrap}>
+              <EmptyState
+                title="No announcements found"
+                text="Try changing filters, clearing the search, or creating a new update for your school community."
+                action={
+                  <div style={emptyStateActions}>
+                    <button onClick={() => clearFilters()} style={btnSecondary}>
+                      Clear Filters
+                    </button>
+                    <button onClick={() => openCreate()} style={btnPrimary}>
+                      + New Announcement
+                    </button>
+                  </div>
+                }
+              />
             </div>
           ) : (
             <>
@@ -660,7 +673,11 @@ export default function AnnouncementsPage() {
 
         {open && (
           <Modal title={mode === "create" ? "New Announcement" : "Edit Announcement"} onClose={closeModal}>
-            {formError && <div style={{ ...alertError, marginTop: 0 }}>{formError}</div>}
+            {formError ? (
+              <div style={{ marginTop: 0, marginBottom: 12 }}>
+                <ErrorState text={formError} />
+              </div>
+            ) : null}
 
             <div style={composeCard}>
               <div style={composeTitle}>Compose</div>
@@ -728,6 +745,25 @@ export default function AnnouncementsPage() {
             </div>
           </Modal>
         )}
+
+        <ConfirmModal
+          open={!!deleteTarget}
+          title="Delete announcement"
+          message={
+            deleteTarget
+              ? `Delete "${deleteTarget.title}"? This cannot be undone.`
+              : ""
+          }
+          confirmText="Delete"
+          cancelText="Cancel"
+          danger
+          busy={deleteBusy}
+          onConfirm={() => void confirmRemove()}
+          onCancel={() => {
+            if (deleteBusy) return;
+            setDeleteTarget(null);
+          }}
+        />
       </div>
     </div>
   );
@@ -1301,27 +1337,8 @@ const sectionDivider: CSSProperties = {
   letterSpacing: 0.4,
 };
 
-const emptyState: CSSProperties = {
+const emptyStateWrap: CSSProperties = {
   padding: 28,
-  textAlign: "center",
-  color: "#cbd5e1",
-};
-
-const emptyStateIcon: CSSProperties = {
-  fontSize: 34,
-};
-
-const emptyStateTitle: CSSProperties = {
-  fontSize: 18,
-  fontWeight: 900,
-  color: "#ffffff",
-  marginTop: 12,
-};
-
-const emptyStateText: CSSProperties = {
-  marginTop: 8,
-  fontSize: 14,
-  opacity: 0.82,
 };
 
 const emptyStateActions: CSSProperties = {
@@ -1555,24 +1572,6 @@ const iconBtn: CSSProperties = {
   cursor: "pointer",
 };
 
-const alertError: CSSProperties = {
-  marginTop: 14,
-  padding: "10px 12px",
-  borderRadius: 12,
-  border: "1px solid rgba(239,68,68,0.22)",
-  background: "rgba(127,29,29,0.24)",
-  color: "#fecaca",
-};
-
-const alertSuccess: CSSProperties = {
-  marginTop: 14,
-  padding: "10px 12px",
-  borderRadius: 12,
-  border: "1px solid rgba(34,197,94,0.22)",
-  background: "rgba(20,83,45,0.24)",
-  color: "#bbf7d0",
-};
-
 const miniDanger: CSSProperties = {
   width: 26,
   height: 26,
@@ -1582,4 +1581,8 @@ const miniDanger: CSSProperties = {
   color: "#ffd6d6",
   fontWeight: 900,
   cursor: "pointer",
+};
+
+const inlineErrorWrap: CSSProperties = {
+  marginBottom: 16,
 };

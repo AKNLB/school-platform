@@ -3,6 +3,11 @@
 import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
+import { useToast } from "@/components/ui/ToastProvider";
+import LoadingState from "@/components/ui/LoadingState";
+import ErrorState from "@/components/ui/ErrorState";
+import EmptyState from "@/components/ui/EmptyState";
+import ConfirmModal from "@/components/ui/ConfirmModal";
 
 type ScoreRow = {
   id: number;
@@ -72,10 +77,11 @@ const emptyForm: ScoreForm = {
 };
 
 export default function ScoresPage() {
+  const { showToast } = useToast();
+
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
 
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
@@ -94,10 +100,12 @@ export default function ScoresPage() {
   const [form, setForm] = useState<ScoreForm>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
 
+  const [deleteTarget, setDeleteTarget] = useState<ScoreRow | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
   async function loadAll() {
     setLoading(true);
     setErr(null);
-    setSuccess(null);
 
     try {
       const [scoresRes, studentsRes, usersRes] = await Promise.allSettled([
@@ -134,7 +142,8 @@ export default function ScoresPage() {
         throw new Error("Failed to load scores and students.");
       }
     } catch (e: unknown) {
-      setErr(extractErr(e, "Failed to load scores."));
+      const message = extractErr(e, "Failed to load scores.");
+      setErr(message);
       setScores([]);
       setStudents([]);
       setTeachers([]);
@@ -366,7 +375,6 @@ export default function ScoresPage() {
   async function submit() {
     setFormError(null);
     setErr(null);
-    setSuccess(null);
 
     const validation = validateForm(form);
     if (validation) {
@@ -398,7 +406,7 @@ export default function ScoresPage() {
           await loadAll();
         }
 
-        setSuccess("Score saved successfully.");
+        showToast("Score saved successfully.", "success");
       } else {
         if (!editing?.id) throw new Error("No score selected.");
 
@@ -411,35 +419,46 @@ export default function ScoresPage() {
           await loadAll();
         }
 
-        setSuccess("Score updated successfully.");
+        showToast("Score updated successfully.", "success");
       }
 
       setOpen(false);
     } catch (e: unknown) {
-      setFormError(extractErr(e, "Failed to save score."));
+      const message = extractErr(e, "Failed to save score.");
+      setFormError(message);
+      showToast(message, "error");
     } finally {
       setBusy(false);
     }
   }
 
-  async function removeScore(row: ScoreRow) {
-    const ok = window.confirm(`Delete ${row.subject} for this student?`);
-    if (!ok) return;
+  function requestDeleteScore(row: ScoreRow) {
+    setDeleteTarget(row);
+  }
 
+  async function confirmDeleteScore() {
+    if (!deleteTarget) return;
+
+    setDeleteBusy(true);
     setBusy(true);
     setErr(null);
-    setSuccess(null);
 
     const prev = scores;
-    setScores((curr) => curr.filter((x) => x.id !== row.id));
 
     try {
-      await api.delete(`/scores/${row.id}`);
-      setSuccess("Score deleted successfully.");
+      const targetId = deleteTarget.id;
+      setScores((curr) => curr.filter((x) => x.id !== targetId));
+
+      await api.delete(`/scores/${targetId}`);
+      showToast("Score deleted successfully.", "success");
+      setDeleteTarget(null);
     } catch (e: unknown) {
       setScores(prev);
-      setErr(extractErr(e, "Failed to delete score."));
+      const message = extractErr(e, "Failed to delete score.");
+      setErr(message);
+      showToast(message, "error");
     } finally {
+      setDeleteBusy(false);
       setBusy(false);
     }
   }
@@ -475,6 +494,30 @@ export default function ScoresPage() {
     };
   }, [form.cont_ass_score, form.exam_score]);
 
+  if (loading) {
+    return (
+      <div style={pageShell}>
+        <div style={backgroundGlowOne} />
+        <div style={backgroundGlowTwo} />
+        <div style={page}>
+          <LoadingState text="Loading scores..." />
+        </div>
+      </div>
+    );
+  }
+
+  if (err && scores.length === 0 && students.length === 0) {
+    return (
+      <div style={pageShell}>
+        <div style={backgroundGlowOne} />
+        <div style={backgroundGlowTwo} />
+        <div style={page}>
+          <ErrorState text={err} onRetry={() => void loadAll()} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={pageShell}>
       <div style={backgroundGlowOne} />
@@ -492,7 +535,10 @@ export default function ScoresPage() {
 
             <div style={heroMiniRow}>
               <HeroMiniBadge label="Average" value={String(stats.avg)} />
-              <HeroMiniBadge label="Pass Rate" value={`${stats.totalRows ? Math.round((stats.pass / stats.totalRows) * 100) : 0}%`} />
+              <HeroMiniBadge
+                label="Pass Rate"
+                value={`${stats.totalRows ? Math.round((stats.pass / stats.totalRows) * 100) : 0}%`}
+              />
               <HeroMiniBadge label="Visible Rows" value={String(stats.totalRows)} />
             </div>
           </div>
@@ -679,34 +725,32 @@ export default function ScoresPage() {
           </div>
         )}
 
-        {err && (
-          <div style={alertBox}>
-            <strong style={{ marginRight: 8 }}>Error:</strong>
-            {err}
+        {err ? (
+          <div style={inlineErrorWrap}>
+            <ErrorState text={err} onRetry={() => void loadAll()} />
           </div>
-        )}
-
-        {success && (
-          <div style={successBox}>
-            <strong style={{ marginRight: 8 }}>Success:</strong>
-            {success}
-          </div>
-        )}
+        ) : null}
 
         <section style={panel}>
           <div style={panelHeader}>
             <div>
               <div style={panelTitle}>Score Register</div>
-              <div style={panelSub}>
-                {loading ? "Loading scores..." : `${filteredScores.length} result(s) found`}
-              </div>
+              <div style={panelSub}>{`${filteredScores.length} result(s) found`}</div>
             </div>
           </div>
 
-          {loading ? (
-            <div style={emptyState}>Loading scores...</div>
-          ) : filteredScores.length === 0 ? (
-            <div style={emptyState}>No scores found for the current filters.</div>
+          {filteredScores.length === 0 ? (
+            <div style={emptyStateWrap}>
+              <EmptyState
+                title="No scores found"
+                text="Try another filter combination or add a new score."
+                action={
+                  <button onClick={openCreate} style={btnPrimary}>
+                    + Add Score
+                  </button>
+                }
+              />
+            </div>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={table}>
@@ -776,7 +820,7 @@ export default function ScoresPage() {
                               <button style={miniButton} onClick={() => openEdit(row)} disabled={busy}>
                                 Edit
                               </button>
-                              <button style={miniDanger} onClick={() => void removeScore(row)} disabled={busy}>
+                              <button style={miniDanger} onClick={() => requestDeleteScore(row)} disabled={busy}>
                                 Delete
                               </button>
                             </div>
@@ -792,7 +836,11 @@ export default function ScoresPage() {
 
         {open && (
           <Modal title={mode === "create" ? "Add Score" : "Edit Score"} onClose={closeModal}>
-            {formError && <div style={{ ...alertBox, marginTop: 0 }}>{formError}</div>}
+            {formError ? (
+              <div style={{ marginTop: 0, marginBottom: 12 }}>
+                <ErrorState text={formError} />
+              </div>
+            ) : null}
 
             <div style={modalGrid}>
               <Field label="Student">
@@ -963,6 +1011,25 @@ export default function ScoresPage() {
             </div>
           </Modal>
         )}
+
+        <ConfirmModal
+          open={!!deleteTarget}
+          title="Delete score"
+          message={
+            deleteTarget
+              ? `Delete ${deleteTarget.subject} for this student?`
+              : ""
+          }
+          confirmText="Delete"
+          cancelText="Cancel"
+          danger
+          busy={deleteBusy}
+          onConfirm={() => void confirmDeleteScore()}
+          onCancel={() => {
+            if (deleteBusy) return;
+            setDeleteTarget(null);
+          }}
+        />
       </div>
     </div>
   );
@@ -1660,9 +1727,8 @@ const panelSub: CSSProperties = {
   color: "#94a3b8",
 };
 
-const emptyState: CSSProperties = {
-  padding: 20,
-  color: "#cbd5e1",
+const emptyStateWrap: CSSProperties = {
+  padding: 18,
 };
 
 const table: CSSProperties = {
@@ -1776,24 +1842,6 @@ const miniDanger: CSSProperties = {
   cursor: "pointer",
 };
 
-const alertBox: CSSProperties = {
-  marginBottom: 16,
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(239,68,68,0.22)",
-  background: "rgba(127,29,29,0.24)",
-  color: "#fecaca",
-};
-
-const successBox: CSSProperties = {
-  marginBottom: 16,
-  padding: "12px 14px",
-  borderRadius: 12,
-  border: "1px solid rgba(34,197,94,0.22)",
-  background: "rgba(20,83,45,0.24)",
-  color: "#bbf7d0",
-};
-
 const modalHeader: CSSProperties = {
   padding: "14px 16px",
   borderBottom: "1px solid rgba(255,255,255,0.08)",
@@ -1901,4 +1949,8 @@ const pillBase: CSSProperties = {
   borderRadius: 999,
   fontWeight: 800,
   whiteSpace: "nowrap",
+};
+
+const inlineErrorWrap: CSSProperties = {
+  marginBottom: 16,
 };
