@@ -1,51 +1,29 @@
-"use client";
-
-import React from "react";
+import type { ReactNode, CSSProperties } from "react";
 
 export default function EmptyState({
   title = "Nothing here yet",
   text = "No records found.",
   action,
+  compact = false,
 }: {
   title?: string;
   text?: string;
-  action?: React.ReactNode;
+  action?: ReactNode;
+  compact?: boolean;
 }) {
   return (
-    <div style={styles.wrap}>
-      <div style={styles.icon}>📭</div>
-      <div style={styles.title}>{title}</div>
-      <div style={styles.text}>{text}</div>
-      {action ? <div style={styles.action}>{action}</div> : null}
+    <div
+      style={{
+        padding: compact ? 16 : 24,
+        borderRadius: 16,
+        border: "1px solid rgba(255,255,255,0.08)",
+        background: "rgba(255,255,255,0.04)",
+        textAlign: "center",
+      }}
+    >
+      <div style={{ fontSize: compact ? 18 : 22, fontWeight: 900 }}>{title}</div>
+      <div style={{ marginTop: 8, opacity: 0.8 }}>{text}</div>
+      {action ? <div style={{ marginTop: 14 }}>{action}</div> : null}
     </div>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  wrap: {
-    borderRadius: 18,
-    padding: 30,
-    background: "#fff",
-    border: "1px solid #e2e8f0",
-    display: "grid",
-    justifyItems: "center",
-    gap: 10,
-    textAlign: "center",
-  },
-  icon: {
-    fontSize: 30,
-  },
-  title: {
-    fontSize: 18,
-    fontWeight: 900,
-    color: "#0f172a",
-  },
-  text: {
-    fontSize: 14,
-    color: "#64748b",
-    maxWidth: 520,
-  },
-  action: {
-    marginTop: 8,
-  },
-};

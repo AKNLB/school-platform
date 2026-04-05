@@ -435,7 +435,7 @@ export default function AdminUsersPage() {
                   <EmptyState
                     title="No users found"
                     text="No users match your current filters."
-                    compact
+                  
                   />
                 ) : (
                   filteredUsers.map((u) => (
