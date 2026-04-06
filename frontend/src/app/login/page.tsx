@@ -42,7 +42,7 @@ export default function LoginPage() {
       if (!res.ok) {
         throw new Error("Login failed");
       }
-
+      
       clearApiSessionState();
       router.push("/dashboard");
     } catch {
