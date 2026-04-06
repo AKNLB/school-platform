@@ -3,7 +3,7 @@
 import type { CSSProperties, FormEvent } from "react";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-
+import { clearApiSessionState } from "@/lib/api";
 export default function LoginPage() {
   const router = useRouter();
 
@@ -43,6 +43,7 @@ export default function LoginPage() {
         throw new Error("Login failed");
       }
 
+      clearApiSessionState();
       router.push("/dashboard");
     } catch {
       setError("Invalid school, username, or password.");

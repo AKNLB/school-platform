@@ -45,7 +45,27 @@ type RequestOpts = {
   headers?: Record<string, string>;
 };
 
-async function request(method: string, path: string, opts?: RequestOpts) {
+function isExpiredCsrfResponse(parsed: any, status: number) {
+  if (status !== 400) return false;
+
+  if (typeof parsed === "string") {
+    return parsed.toLowerCase().includes("csrf token has expired");
+  }
+
+  if (parsed && typeof parsed === "object") {
+    const msg = `${parsed?.error || ""} ${parsed?.message || ""}`.toLowerCase();
+    return msg.includes("csrf token has expired");
+  }
+
+  return false;
+}
+
+async function request(
+  method: string,
+  path: string,
+  opts?: RequestOpts,
+  retrying = false
+) {
   const p = path.startsWith("/") ? path : `/${path}`;
   const urlPath = p.startsWith("/api") ? p : `/api${p}`;
   const url = `${API_BASE}${urlPath}${qs(opts?.params)}`;
@@ -82,6 +102,11 @@ async function request(method: string, path: string, opts?: RequestOpts) {
     parsed = text ? JSON.parse(text) : null;
   } catch {
     parsed = text || null;
+  }
+
+  if (isExpiredCsrfResponse(parsed, res.status) && !retrying) {
+    clearApiSessionState();
+    return request(method, path, opts, true);
   }
 
   if (!res.ok) {
