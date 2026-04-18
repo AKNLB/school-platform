@@ -151,6 +151,26 @@ def _sqlite_table_exists(conn, table_name: str) -> bool:
 # -----------------------------------------------------------------------------
 # Models
 # -----------------------------------------------------------------------------
+from datetime import datetime
+class AuditLog(db.Model):
+    __tablename__ = "audit_log"
+
+    id = db.Column(db.Integer, primary_key=True)
+    school_id = db.Column(db.Integer, nullable=False, index=True)
+    user_id = db.Column(db.Integer, nullable=True, index=True)
+    user_email = db.Column(db.String(255), nullable=True, index=True)
+
+    module = db.Column(db.String(50), nullable=False, index=True)
+    action = db.Column(db.String(50), nullable=False, index=True)
+
+    entity_type = db.Column(db.String(50), nullable=False, index=True)
+    entity_id = db.Column(db.String(50), nullable=True, index=True)
+    entity_label = db.Column(db.String(255), nullable=True)
+
+    details_json = db.Column(db.Text, nullable=True)
+
+    ip_address = db.Column(db.String(64), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     school_id = db.Column(db.Integer, db.ForeignKey("school.id"), nullable=True, index=True)
@@ -976,7 +996,7 @@ bridge.ALLOWED_ANNOUNCEMENT_ATTACHMENTS = ALLOWED_ANNOUNCEMENT_ATTACHMENTS
 bridge.current_user = current_user
 bridge.get_school_or_404 = get_school_or_404
 bridge.require_school_access = require_school_access
-
+bridge.AuditLog = AuditLog
 from app.routes import register_routes
 register_routes(app)
 

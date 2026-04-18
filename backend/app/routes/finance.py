@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify, send_file
 import io
 
+from app.audit import log_audit
 import app.bridge as bridge
 from app.decorators import (
     ROLE_ADMIN,
@@ -123,6 +124,24 @@ def create_or_update_tuition(slug=None):
     tuition.status = data.get("status")
 
     db.session.commit()
+
+    log_audit(
+        module="finance",
+        action="save_tuition",
+        entity_type="tuition",
+        entity_id=tuition.id,
+        entity_label=f"{student.name} - {term}",
+        details={
+            "student_id": student.id,
+            "student_name": student.name,
+            "term": term,
+            "total_amount": tuition.total_amount,
+            "amount_paid": tuition.amount_paid,
+            "status": tuition.status,
+            "payment_plan": tuition.payment_plan,
+        },
+    )
+
     return jsonify({"id": tuition.id}), 200
 
 
@@ -160,6 +179,21 @@ def add_payment(tuition_id, slug=None):
 
     tuition.amount_paid = float(tuition.amount_paid or 0) + float(p.amount)
     db.session.commit()
+
+    log_audit(
+        module="finance",
+        action="add_payment",
+        entity_type="payment",
+        entity_id=p.id,
+        entity_label=f"Payment for student {tuition.student_id}",
+        details={
+            "tuition_id": tuition.id,
+            "student_id": tuition.student_id,
+            "amount": p.amount,
+            "method": p.method,
+            "reference": p.reference,
+        },
+    )
 
     return jsonify({"payment_id": p.id, "amount_paid": tuition.amount_paid}), 201
 
@@ -341,6 +375,15 @@ def finance_statement_export(slug=None):
             "payment_plan": r.payment_plan or "",
         })
 
+    log_audit(
+        module="finance",
+        action="export_statement",
+        entity_type="finance_statement",
+        entity_id=term or "all",
+        entity_label="Finance Statement Export",
+        details={"term": term, "exported_count": len(items)},
+    )
+
     return jsonify({
         "term": term,
         "exported_count": len(items),
@@ -365,8 +408,15 @@ def payment_receipt_pdf(payment_id, slug=None):
     if not payment:
         return jsonify({"error": "Payment not found"}), 404
 
-    # Bridge-safe simple PDF placeholder response if your original code used WeasyPrint elsewhere.
-    # If you already have the original PDF-building helper in work.py, we can move that later.
+    log_audit(
+        module="finance",
+        action="open_receipt_pdf",
+        entity_type="payment",
+        entity_id=payment.id,
+        entity_label=f"Receipt {payment.id}",
+        details={"amount": payment.amount, "method": payment.method},
+    )
+
     content = (
         f"Receipt\n\n"
         f"Payment ID: {payment.id}\n"

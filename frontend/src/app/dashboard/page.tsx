@@ -58,6 +58,7 @@ const modules: ModuleItem[] = [
     category: "Operations",
     priority: true,
   },
+  
   {
     title: "Events",
     href: "/dashboard/events",
@@ -106,6 +107,16 @@ const modules: ModuleItem[] = [
     icon: "⚙️",
     accent: "linear-gradient(135deg, #334155, #64748b)",
     category: "Administration",
+  },
+  {
+    title: "Activity",
+    href: "/dashboard/activity",
+    desc: "Review audit logs across students, finance, resources, and settings.",
+    icon: "🧭",
+    accent: "linear-gradient(135deg, #0f172a, #475569)",
+    category: "Administration",
+    priority: true,
+    adminOnly: true,
   },
   {
     title: "Admin Users",

@@ -1,3 +1,4 @@
+
 db = None
 limiter = None
 csrf = None
@@ -30,3 +31,4 @@ uuid = None
 now_str = None
 ALLOWED_RESOURCE_TYPES = None
 date = None
+AuditLog = None

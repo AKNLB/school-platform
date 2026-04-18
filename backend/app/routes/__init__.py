@@ -12,6 +12,7 @@ def register_routes(app):
     from app.routes.announcements import announcements_bp
     from app.routes.tasks import tasks_bp
     from app.routes.events import events_bp
+    from app.routes.audit_logs import audit_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(admin_users_bp)
@@ -26,3 +27,4 @@ def register_routes(app):
     app.register_blueprint(announcements_bp)
     app.register_blueprint(tasks_bp)
     app.register_blueprint(events_bp)
+    app.register_blueprint(audit_bp)

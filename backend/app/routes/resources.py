@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify, send_from_directory, current_app
 import os
 
+from app.audit import log_audit
 import app.bridge as bridge
 from app.decorators import (
     ROLE_ADMIN,
@@ -109,6 +110,20 @@ def api_resources(slug=None):
     r.root_id = r.id
     db.session.commit()
 
+    log_audit(
+        module="resources",
+        action="upload",
+        entity_type="resource",
+        entity_id=r.id,
+        entity_label=r.filename,
+        details={
+            "filetype": r.filetype,
+            "category": r.category,
+            "visibility": r.visibility,
+            "version": r.version,
+        },
+    )
+
     return jsonify(_resource_to_dict(r)), 201
 
 
@@ -126,6 +141,19 @@ def api_resource_download(rid: int, slug=None):
 
     if not r:
         return jsonify({"error": "Resource not found"}), 404
+
+    log_audit(
+        module="resources",
+        action="download",
+        entity_type="resource",
+        entity_id=r.id,
+        entity_label=r.filename,
+        details={
+            "filetype": r.filetype,
+            "category": r.category,
+            "version": r.version,
+        },
+    )
 
     return send_from_directory(
         current_app.config["UPLOAD_RESOURCES"],
@@ -179,6 +207,20 @@ def api_resource_new_version(rid: int, slug=None):
     db.session.add(r)
     db.session.commit()
 
+    log_audit(
+        module="resources",
+        action="upload_version",
+        entity_type="resource",
+        entity_id=r.id,
+        entity_label=r.filename,
+        details={
+            "root_id": r.root_id,
+            "version": r.version,
+            "category": r.category,
+            "visibility": r.visibility,
+        },
+    )
+
     return jsonify(_resource_to_dict(r)), 201
 
 
@@ -198,6 +240,12 @@ def api_resource_delete(rid: int, slug=None):
     if not r:
         return jsonify({"error": "Resource not found"}), 404
 
+    resource_name = r.filename
+    stored_name = r.stored_name
+    resource_type = r.filetype
+    resource_category = r.category
+    resource_version = r.version
+
     try:
         path = os.path.join(current_app.config["UPLOAD_RESOURCES"], r.stored_name)
         if os.path.exists(path):
@@ -207,4 +255,19 @@ def api_resource_delete(rid: int, slug=None):
 
     db.session.delete(r)
     db.session.commit()
+
+    log_audit(
+        module="resources",
+        action="delete",
+        entity_type="resource",
+        entity_id=rid,
+        entity_label=resource_name,
+        details={
+            "stored_name": stored_name,
+            "filetype": resource_type,
+            "category": resource_category,
+            "version": resource_version,
+        },
+    )
+
     return jsonify({"message": "Deleted"}), 200

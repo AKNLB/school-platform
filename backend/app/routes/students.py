@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify, url_for, send_from_directory
 from werkzeug.utils import secure_filename
 import os
 from datetime import datetime
-
+from app.audit import log_audit
 import app.bridge as bridge
 from app.decorators import (
     ROLE_ADMIN,
@@ -73,6 +73,16 @@ def students(slug=None):
     )
     db.session.add(s)
     db.session.commit()
+
+    log_audit(
+        module="students",
+        action="create",
+        entity_type="student",
+        entity_id=s.id,
+        entity_label=s.name,
+        details={"grade": s.grade, "guardian_name": s.guardian_name},
+    )
+
     return jsonify({"id": s.id}), 201
 
 @students_bp.route("/api/s/<slug>/students/<int:student_id>", methods=["GET", "PUT", "DELETE"])
@@ -119,10 +129,34 @@ def modify_student(student_id, slug=None):
             s.grade = int(data["grade"])
 
         db.session.commit()
+
+        log_audit(
+            module="students",
+            action="update",
+            entity_type="student",
+            entity_id=s.id,
+            entity_label=s.name,
+            details={"updated_fields": list(data.keys())},
+        )
+
         return jsonify({"message": "Student updated"}), 200
+
+    # DELETE
+    student_name = s.name
+    student_grade = s.grade
 
     db.session.delete(s)
     db.session.commit()
+
+    log_audit(
+        module="students",
+        action="delete",
+        entity_type="student",
+        entity_id=student_id,
+        entity_label=student_name,
+        details={"grade": student_grade},
+    )
+
     return jsonify({"message": "Student deleted"}), 200
 
 @students_bp.route("/api/s/<slug>/students/<int:student_id>/photo", methods=["POST"])
@@ -161,6 +195,15 @@ def upload_student_photo(student_id, slug=None):
 
     s.photo_filename = fname
     db.session.commit()
+
+    log_audit(
+        module="students",
+        action="upload_photo",
+        entity_type="student",
+        entity_id=s.id,
+        entity_label=s.name,
+        details={"photo_filename": fname},
+    )
 
     return jsonify({
         "message": "Photo uploaded",

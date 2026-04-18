@@ -5,7 +5,7 @@ from datetime import datetime
 
 import app.bridge as bridge
 from app.decorators import ROLE_ADMIN, roles_required, school_context_required, current_school_id
-
+from app.audit import log_audit
 settings_bp = Blueprint("settings_bp", __name__)
 
 def _get_settings_model():
@@ -73,11 +73,26 @@ def update_settings(slug=None):
     s = _get_or_create_settings()
 
     data = request.get_json(silent=True) or {}
+    changed_fields = []
+
     for k in ["school_name", "address", "phone", "email", "principal_name"]:
         if k in data:
-            setattr(s, k, data[k] or "")
+            new_value = data[k] or ""
+            if getattr(s, k) != new_value:
+                changed_fields.append(k)
+            setattr(s, k, new_value)
 
     db.session.commit()
+
+    log_audit(
+        module="settings",
+        action="update",
+        entity_type="school_settings",
+        entity_id=s.school_id,
+        entity_label=s.school_name or "School Settings",
+        details={"changed_fields": changed_fields},
+    )
+
     return jsonify({"message": "Settings updated"}), 200
 
 @settings_bp.route("/api/s/<slug>/settings/upload", methods=["POST"])
@@ -114,7 +129,14 @@ def upload_settings_asset(slug=None):
         return jsonify({"error": "kind must be logo | principal_signature | teacher_signature"}), 400
 
     db.session.commit()
-
+    log_audit(
+    module="settings",
+    action="upload_asset",
+    entity_type="school_asset",
+    entity_id=s.school_id,
+    entity_label=kind,
+    details={"kind": kind, "filename": fname},
+    )
     return jsonify({
         "message": "uploaded",
         "filename": fname,
