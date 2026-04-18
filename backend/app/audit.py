@@ -38,6 +38,6 @@ def log_audit(
             ip_address=request.headers.get("x-forwarded-for", request.remote_addr),
         )
         db.session.add(row)
-        db.session.flush()
+        db.session.commit()
     except Exception:
         pass

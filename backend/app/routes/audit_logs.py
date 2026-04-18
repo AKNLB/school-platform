@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 import json
+from datetime import datetime, timedelta
 
 import app.bridge as bridge
 from app.decorators import ROLE_ADMIN, current_school_id, roles_required, school_context_required
@@ -42,7 +43,12 @@ def get_audit_logs(slug=None):
     action = (request.args.get("action") or "").strip().lower()
     entity_type = (request.args.get("entity_type") or "").strip().lower()
     q = (request.args.get("q") or "").strip().lower()
-    limit = min(int(request.args.get("limit", 100)), 300)
+
+    start_date = (request.args.get("start_date") or "").strip()
+    end_date = (request.args.get("end_date") or "").strip()
+
+    page = max(int(request.args.get("page", 1)), 1)
+    page_size = min(max(int(request.args.get("page_size", 25)), 1), 100)
 
     qs = AuditLog.query.filter_by(school_id=current_school_id())
 
@@ -53,21 +59,52 @@ def get_audit_logs(slug=None):
     if entity_type:
         qs = qs.filter(AuditLog.entity_type == entity_type)
 
-    rows = qs.order_by(AuditLog.created_at.desc()).limit(limit).all()
+    if start_date:
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            qs = qs.filter(AuditLog.created_at >= start_dt)
+        except ValueError:
+            return jsonify({"error": "Invalid start_date. Use YYYY-MM-DD"}), 400
+
+    if end_date:
+        try:
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+            qs = qs.filter(AuditLog.created_at < end_dt)
+        except ValueError:
+            return jsonify({"error": "Invalid end_date. Use YYYY-MM-DD"}), 400
 
     if q:
-        rows = [
-            r for r in rows
-            if q in (r.user_email or "").lower()
-            or q in (r.module or "").lower()
-            or q in (r.action or "").lower()
-            or q in (r.entity_type or "").lower()
-            or q in (r.entity_label or "").lower()
-            or q in (r.entity_id or "").lower()
-            or q in (r.details_json or "").lower()
-        ]
+        like = f"%{q}%"
+        qs = qs.filter(
+            (AuditLog.user_email.ilike(like)) |
+            (AuditLog.module.ilike(like)) |
+            (AuditLog.action.ilike(like)) |
+            (AuditLog.entity_type.ilike(like)) |
+            (AuditLog.entity_label.ilike(like)) |
+            (AuditLog.entity_id.ilike(like)) |
+            (AuditLog.details_json.ilike(like))
+        )
 
-    return jsonify([_row_to_dict(r) for r in rows]), 200
+    total = qs.count()
+
+    rows = (
+        qs.order_by(AuditLog.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+
+    return jsonify({
+        "items": [_row_to_dict(r) for r in rows],
+        "pagination": {
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": max((total + page_size - 1) // page_size, 1),
+            "has_prev": page > 1,
+            "has_next": page * page_size < total,
+        },
+    }), 200
 
 
 @audit_bp.route("/api/s/<slug>/audit-logs/summary", methods=["GET"])

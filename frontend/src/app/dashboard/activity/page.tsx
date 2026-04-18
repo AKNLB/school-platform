@@ -34,6 +34,15 @@ type AuditSummary = {
   latest: AuditRow[];
 };
 
+type AuditPagination = {
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+  has_prev: boolean;
+  has_next: boolean;
+};
+
 const EMPTY_SUMMARY: AuditSummary = {
   count: 0,
   by_module: {
@@ -44,6 +53,15 @@ const EMPTY_SUMMARY: AuditSummary = {
   },
   by_action: {},
   latest: [],
+};
+
+const EMPTY_PAGINATION: AuditPagination = {
+  page: 1,
+  page_size: 25,
+  total: 0,
+  total_pages: 1,
+  has_prev: false,
+  has_next: false,
 };
 
 const MODULE_OPTIONS = ["", "students", "finance", "resources", "settings"];
@@ -63,9 +81,12 @@ const ACTION_OPTIONS = [
   "download",
 ];
 
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+
 export default function ActivityPage() {
   const [rows, setRows] = useState<AuditRow[]>([]);
   const [summary, setSummary] = useState<AuditSummary>(EMPTY_SUMMARY);
+  const [pagination, setPagination] = useState<AuditPagination>(EMPTY_PAGINATION);
 
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -74,29 +95,51 @@ export default function ActivityPage() {
   const [moduleFilter, setModuleFilter] = useState("");
   const [actionFilter, setActionFilter] = useState("");
   const [search, setSearch] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+
   const [selectedRow, setSelectedRow] = useState<AuditRow | null>(null);
 
-  async function loadAudit() {
+  async function loadAudit(targetPage = page, targetPageSize = pageSize) {
     setBusy(true);
     setErr(null);
 
     try {
-      const params: Record<string, string | number> = { limit: 150 };
+      const params: Record<string, string | number> = {
+        page: targetPage,
+        page_size: targetPageSize,
+      };
+
       if (moduleFilter) params.module = moduleFilter;
       if (actionFilter) params.action = actionFilter;
       if (search.trim()) params.q = search.trim();
+      if (startDate) params.start_date = startDate;
+      if (endDate) params.end_date = endDate;
 
       const [logsRes, summaryRes] = await Promise.all([
         api.get("/audit-logs", { params }),
         api.get("/audit-logs/summary"),
       ]);
 
-      setRows(Array.isArray(logsRes.data) ? logsRes.data : []);
+      const logsData = logsRes.data || {};
+      const nextRows: AuditRow[] = Array.isArray(logsData.items) ? logsData.items : [];
+      
+      setRows(nextRows);
+      setPagination(normalizePagination(logsData.pagination));
       setSummary(normalizeSummary(summaryRes.data));
+      
+      setSelectedRow((prev) => {
+        if (!prev) return nextRows[0] || null;
+        return nextRows.find((r: AuditRow) => r.id === prev.id) || nextRows[0] || null;
+      });
     } catch (e: unknown) {
       setErr(extractErr(e, "Failed to load activity log."));
       setRows([]);
       setSummary(EMPTY_SUMMARY);
+      setPagination(EMPTY_PAGINATION);
+      setSelectedRow(null);
     } finally {
       setLoading(false);
       setBusy(false);
@@ -104,7 +147,7 @@ export default function ActivityPage() {
   }
 
   useEffect(() => {
-    void loadAudit();
+    void loadAudit(1, pageSize);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -117,28 +160,47 @@ export default function ActivityPage() {
 
   const recentByModule = useMemo(() => {
     return [
-      {
-        label: "Students",
-        value: summary.by_module.students,
-        accent: "blue" as const,
-      },
-      {
-        label: "Finance",
-        value: summary.by_module.finance,
-        accent: "amber" as const,
-      },
-      {
-        label: "Resources",
-        value: summary.by_module.resources,
-        accent: "purple" as const,
-      },
-      {
-        label: "Settings",
-        value: summary.by_module.settings,
-        accent: "green" as const,
-      },
+      { label: "Students", value: summary.by_module.students, accent: "blue" as const },
+      { label: "Finance", value: summary.by_module.finance, accent: "amber" as const },
+      { label: "Resources", value: summary.by_module.resources, accent: "purple" as const },
+      { label: "Settings", value: summary.by_module.settings, accent: "green" as const },
     ];
   }, [summary]);
+
+  function applyFilters() {
+    setPage(1);
+    void loadAudit(1, pageSize);
+  }
+
+  function clearFilters() {
+    setModuleFilter("");
+    setActionFilter("");
+    setSearch("");
+    setStartDate("");
+    setEndDate("");
+    setPage(1);
+    void loadAudit(1, pageSize);
+  }
+
+  function goToPrevPage() {
+    if (!pagination.has_prev) return;
+    const nextPage = page - 1;
+    setPage(nextPage);
+    void loadAudit(nextPage, pageSize);
+  }
+
+  function goToNextPage() {
+    if (!pagination.has_next) return;
+    const nextPage = page + 1;
+    setPage(nextPage);
+    void loadAudit(nextPage, pageSize);
+  }
+
+  function changePageSize(nextSize: number) {
+    setPageSize(nextSize);
+    setPage(1);
+    void loadAudit(1, nextSize);
+  }
 
   if (loading) {
     return (
@@ -158,7 +220,7 @@ export default function ActivityPage() {
         <div style={styles.bgGlowOne} />
         <div style={styles.bgGlowTwo} />
         <div style={styles.container}>
-          <ErrorState text={err} onRetry={() => void loadAudit()} />
+          <ErrorState text={err} onRetry={() => void loadAudit(page, pageSize)} />
         </div>
       </div>
     );
@@ -182,12 +244,13 @@ export default function ActivityPage() {
             <div style={styles.heroPills}>
               <HeroPill label="Total Events" value={String(summary.count)} />
               <HeroPill label="Visible Rows" value={String(rows.length)} />
+              <HeroPill label="Page" value={`${pagination.page}/${pagination.total_pages}`} />
               <HeroPill label="Status" value={busy ? "Refreshing" : "Live"} />
             </div>
           </div>
 
           <div style={styles.heroSide}>
-            <button onClick={() => void loadAudit()} style={styles.primaryBtn} disabled={busy}>
+            <button onClick={() => void loadAudit(page, pageSize)} style={styles.primaryBtn} disabled={busy}>
               {busy ? "Refreshing..." : "Refresh Activity"}
             </button>
           </div>
@@ -206,7 +269,7 @@ export default function ActivityPage() {
                 <div>
                   <div style={styles.panelTitle}>Filter Activity</div>
                   <div style={styles.panelSub}>
-                    Narrow logs by module, action, or keyword.
+                    Narrow logs by module, action, keyword, and date range.
                   </div>
                 </div>
               </div>
@@ -254,19 +317,46 @@ export default function ActivityPage() {
                   />
                 </div>
 
+                <div style={styles.fieldWrap}>
+                  <div style={styles.fieldLabel}>Start Date</div>
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    style={styles.fieldInput}
+                  />
+                </div>
+
+                <div style={styles.fieldWrap}>
+                  <div style={styles.fieldLabel}>End Date</div>
+                  <input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    style={styles.fieldInput}
+                  />
+                </div>
+
+                <div style={styles.fieldWrap}>
+                  <div style={styles.fieldLabel}>Page Size</div>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => changePageSize(Number(e.target.value))}
+                    style={styles.fieldInput}
+                  >
+                    {PAGE_SIZE_OPTIONS.map((size) => (
+                      <option key={size} value={size}>
+                        {size} per page
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <div style={styles.filterActions}>
-                  <button onClick={() => void loadAudit()} style={styles.primaryBtn} disabled={busy}>
+                  <button onClick={applyFilters} style={styles.primaryBtn} disabled={busy}>
                     Apply
                   </button>
-                  <button
-                    onClick={() => {
-                      setModuleFilter("");
-                      setActionFilter("");
-                      setSearch("");
-                    }}
-                    style={styles.secondaryBtn}
-                    disabled={busy}
-                  >
+                  <button onClick={clearFilters} style={styles.secondaryBtn} disabled={busy}>
                     Clear
                   </button>
                 </div>
@@ -281,6 +371,10 @@ export default function ActivityPage() {
                     Latest audit trail entries across key modules.
                   </div>
                 </div>
+
+                <div style={styles.paginationInfo}>
+                  {pagination.total} total • page {pagination.page} of {pagination.total_pages}
+                </div>
               </div>
 
               {rows.length === 0 ? (
@@ -291,35 +385,59 @@ export default function ActivityPage() {
                   />
                 </div>
               ) : (
-                <div style={styles.timelineWrap}>
-                  {rows.map((row) => (
+                <>
+                  <div style={styles.timelineWrap}>
+                    {rows.map((row) => (
+                      <button
+                        key={row.id}
+                        type="button"
+                        style={styles.timelineRow}
+                        onClick={() => setSelectedRow(row)}
+                      >
+                        <div style={styles.timelineDot}>{iconForModule(row.module)}</div>
+
+                        <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
+                          <div style={styles.timelineTop}>
+                            <span style={moduleBadgeStyle(row.module)}>{titleize(row.module)}</span>
+                            <span style={styles.actionBadge}>{titleize(row.action)}</span>
+                          </div>
+
+                          <div style={styles.timelineTitle}>
+                            {row.entity_label || `${titleize(row.entity_type)} #${row.entity_id || "--"}`}
+                          </div>
+
+                          <div style={styles.timelineMeta}>
+                            {row.user_email || "Unknown user"} • {formatDateTime(row.created_at)}
+                          </div>
+                        </div>
+
+                        <div style={styles.timelineArrow}>→</div>
+                      </button>
+                    ))}
+                  </div>
+
+                  <div style={styles.paginationBar}>
                     <button
-                      key={row.id}
-                      type="button"
-                      style={styles.timelineRow}
-                      onClick={() => setSelectedRow(row)}
+                      onClick={goToPrevPage}
+                      style={styles.secondaryBtn}
+                      disabled={busy || !pagination.has_prev}
                     >
-                      <div style={styles.timelineDot}>{iconForModule(row.module)}</div>
-
-                      <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
-                        <div style={styles.timelineTop}>
-                          <span style={moduleBadgeStyle(row.module)}>{titleize(row.module)}</span>
-                          <span style={styles.actionBadge}>{titleize(row.action)}</span>
-                        </div>
-
-                        <div style={styles.timelineTitle}>
-                          {row.entity_label || `${titleize(row.entity_type)} #${row.entity_id || "--"}`}
-                        </div>
-
-                        <div style={styles.timelineMeta}>
-                          {row.user_email || "Unknown user"} • {formatDateTime(row.created_at)}
-                        </div>
-                      </div>
-
-                      <div style={styles.timelineArrow}>→</div>
+                      Previous
                     </button>
-                  ))}
-                </div>
+
+                    <div style={styles.paginationCenter}>
+                      Page {pagination.page} of {pagination.total_pages}
+                    </div>
+
+                    <button
+                      onClick={goToNextPage}
+                      style={styles.secondaryBtn}
+                      disabled={busy || !pagination.has_next}
+                    >
+                      Next
+                    </button>
+                  </div>
+                </>
               )}
             </section>
           </div>
@@ -402,6 +520,17 @@ function normalizeSummary(data: any): AuditSummary {
     },
     by_action: data?.by_action && typeof data.by_action === "object" ? data.by_action : {},
     latest: Array.isArray(data?.latest) ? data.latest : [],
+  };
+}
+
+function normalizePagination(data: any): AuditPagination {
+  return {
+    page: Number(data?.page || 1),
+    page_size: Number(data?.page_size || 25),
+    total: Number(data?.total || 0),
+    total_pages: Number(data?.total_pages || 1),
+    has_prev: Boolean(data?.has_prev),
+    has_next: Boolean(data?.has_next),
   };
 }
 
@@ -679,6 +808,11 @@ const styles: Record<string, CSSProperties> = {
   panelHeader: {
     padding: 18,
     borderBottom: "1px solid rgba(255,255,255,0.08)",
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 12,
+    alignItems: "center",
+    flexWrap: "wrap",
   },
   panelTitle: {
     fontSize: 20,
@@ -724,6 +858,11 @@ const styles: Record<string, CSSProperties> = {
     gap: 10,
     alignItems: "flex-end",
     gridColumn: "1 / -1",
+  },
+  paginationInfo: {
+    color: "#94a3b8",
+    fontSize: 13,
+    fontWeight: 700,
   },
   timelineWrap: {
     display: "grid",
@@ -782,6 +921,19 @@ const styles: Record<string, CSSProperties> = {
   timelineArrow: {
     color: "#94a3b8",
     fontWeight: 900,
+  },
+  paginationBar: {
+    padding: "0 18px 18px 18px",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    flexWrap: "wrap",
+  },
+  paginationCenter: {
+    color: "#cbd5e1",
+    fontSize: 14,
+    fontWeight: 700,
   },
   sideList: {
     display: "grid",
