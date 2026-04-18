@@ -22,9 +22,9 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-school_platform}
-      POSTGRES_USER: ${POSTGRES_USER:-school_platform}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: school
+      POSTGRES_USER: school
+      POSTGRES_PASSWORD: StrongPass123
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -39,7 +39,7 @@ services:
     environment:
       - FLASK_ENV=production
       - SECRET_KEY=${SECRET_KEY}
-      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://school_platform:change-me@postgres:5432/school_platform}
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://school_platform:StrongPass123@postgres:5432/school_platform}
       - FLASK_APP=wsgi.py
       - COOKIE_SECURE=${COOKIE_SECURE:-0}
       - CORS_ORIGINS=${CORS_ORIGINS:-}

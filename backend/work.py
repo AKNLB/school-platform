@@ -30,13 +30,15 @@ from werkzeug.utils import secure_filename
 # Paths / config
 # -----------------------------------------------------------------------------
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
+STORAGE_ROOT = os.getenv("STORAGE_ROOT") or BASE_DIR
+
+UPLOADS_DIR = os.path.join(STORAGE_ROOT, "uploads")
 SCHOOL_LOGO_DIR = os.path.join(UPLOADS_DIR, "school")
-UPLOAD_ANNOUNCEMENTS = os.path.join(BASE_DIR, "uploads", "announcements")
-UPLOAD_DOCS = os.path.join(BASE_DIR, "uploaded_docs")
-UPLOAD_PHOTOS = os.path.join(BASE_DIR, "uploads", "photos")
-UPLOAD_RESOURCES = os.path.join(BASE_DIR, "uploads", "resources")
-RECEIPT_DIR = os.path.join(BASE_DIR, "receipts")
+UPLOAD_ANNOUNCEMENTS = os.path.join(UPLOADS_DIR, "announcements")
+UPLOAD_DOCS = os.path.join(STORAGE_ROOT, "uploaded_docs")
+UPLOAD_PHOTOS = os.path.join(UPLOADS_DIR, "photos")
+UPLOAD_RESOURCES = os.path.join(UPLOADS_DIR, "resources")
+RECEIPT_DIR = os.path.join(STORAGE_ROOT, "receipts")
 
 for folder in (
     SCHOOL_LOGO_DIR,
@@ -978,7 +980,7 @@ bridge.require_school_access = require_school_access
 from app.routes import register_routes
 register_routes(app)
 
-print(app.url_map)
+
 
 # -----------------------------------------------------------------------------
 # Startup

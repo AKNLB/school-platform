@@ -29,11 +29,11 @@ from flask import url_for
 def _allowed_file(filename: str, allowed_set: set[str]) -> bool:
     return bridge.allowed_file(filename, allowed_set)
 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+STORAGE_ROOT = os.getenv("STORAGE_ROOT") or BASE_DIR
+
 def _assets_dir():
-    return os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-        "assets",
-    )
+    return os.path.join(STORAGE_ROOT, "assets")
 
 @settings_bp.route("/api/s/<slug>/settings", methods=["GET"])
 @settings_bp.route("/api/settings", methods=["GET"])
@@ -43,7 +43,14 @@ def get_settings(slug=None):
     s = _get_or_create_settings()
 
     def file_url(fname):
-        return url_for("settings_bp.serve_asset", filename=fname, _external=True) if fname else None
+        if not fname:
+            return None
+
+        public_backend_origin = (os.getenv("PUBLIC_BACKEND_ORIGIN") or "").rstrip("/")
+        if public_backend_origin:
+            return f"{public_backend_origin}/assets/{fname}"
+
+        return url_for("settings_bp.serve_asset", filename=fname, _external=True)
 
     return jsonify({
         "school_name": s.school_name or "",
@@ -107,7 +114,15 @@ def upload_settings_asset(slug=None):
         return jsonify({"error": "kind must be logo | principal_signature | teacher_signature"}), 400
 
     db.session.commit()
-    return jsonify({"message": "uploaded", "filename": fname}), 201
+
+    return jsonify({
+        "message": "uploaded",
+        "filename": fname,
+        "url": f"{(os.getenv('PUBLIC_BACKEND_ORIGIN') or '').rstrip('/')}/assets/{fname}"
+            if os.getenv("PUBLIC_BACKEND_ORIGIN")
+            else url_for("settings_bp.serve_asset", filename=fname, _external=True),
+        "kind": kind,
+    }), 201
 
 @settings_bp.route("/assets/<filename>")
 def serve_asset(filename):

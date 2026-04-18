@@ -18,6 +18,7 @@ current_user = None
 Announcement = None
 Task = None
 Event = None
+parse_time = None
 UPLOAD_ANNOUNCEMENTS = None
 ALLOWED_ANNOUNCEMENT_ATTACHMENTS = None
 

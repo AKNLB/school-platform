@@ -12,3 +12,9 @@ backend/uploads/
 backend/uploaded_docs/
 backend/receipts/
 backend/assets/
+
+__pycache__/
+*.pyc
+backend/data/*.db
+backend/data/*.sqlite
+backend/data/*.sqlite3

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { fetchMe, type AuthedUser } from "@/lib/auth";
+import { api } from "@/lib/api";
 import LoadingState from "@/components/ui/LoadingState";
 import ErrorState from "@/components/ui/ErrorState";
 import EmptyState from "@/components/ui/EmptyState";
@@ -16,6 +17,17 @@ type ModuleItem = {
   category: "Academic" | "Administration" | "Communication" | "Operations";
   priority?: boolean;
   adminOnly?: boolean;
+};
+
+type DashboardStats = {
+  studentCount: number;
+  attendanceTodayCount: number;
+  presentTodayCount: number;
+  absentTodayCount: number;
+  totalOutstanding: number;
+  recentAnnouncements: Array<{ id: string; title: string; audience?: string; created_at?: string }>;
+  recentTasks: Array<{ id: string; title: string; status?: string; due_date?: string }>;
+  upcomingEvents: Array<{ id: string; title: string; date?: string; location?: string }>;
 };
 
 const modules: ModuleItem[] = [
@@ -115,10 +127,25 @@ const modules: ModuleItem[] = [
   },
 ];
 
+const emptyStats: DashboardStats = {
+  studentCount: 0,
+  attendanceTodayCount: 0,
+  presentTodayCount: 0,
+  absentTodayCount: 0,
+  totalOutstanding: 0,
+  recentAnnouncements: [],
+  recentTasks: [],
+  upcomingEvents: [],
+};
+
 export default function DashboardPage() {
   const [user, setUser] = useState<AuthedUser>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
+
+  const [stats, setStats] = useState<DashboardStats>(emptyStats);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [statsError, setStatsError] = useState<string | null>(null);
 
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("All");
@@ -136,29 +163,92 @@ export default function DashboardPage() {
     }
   }
 
+  async function loadStats() {
+    setStatsLoading(true);
+    setStatsError(null);
+
+    const today = new Date().toISOString().slice(0, 10);
+
+    try {
+      const [
+        studentsRes,
+        attendanceRes,
+        financeRes,
+        announcementsRes,
+        tasksRes,
+        eventsRes,
+      ] = await Promise.allSettled([
+        api.get("/students"),
+        api.get("/attendance", { params: { date: today } }),
+        api.get("/finance/summary"),
+        api.get("/announcements"),
+        api.get("/tasks"),
+        api.get("/events"),
+      ]);
+
+      const students = settledData(studentsRes);
+      const attendance = settledData(attendanceRes);
+      const finance = settledData(financeRes);
+      const announcements = settledData(announcementsRes);
+      const tasks = settledData(tasksRes);
+      const events = settledData(eventsRes);
+
+      const studentRows = normalizeArray(students);
+      const attendanceRows = normalizeArray(attendance);
+      const announcementRows = normalizeArray(announcements).slice(0, 5);
+      const taskRows = normalizeArray(tasks).slice(0, 5);
+      const eventRows = normalizeArray(events).slice(0, 5);
+
+      const presentTodayCount = attendanceRows.filter((row) =>
+        String(row?.status || "").toLowerCase() === "present"
+      ).length;
+
+      const absentTodayCount = attendanceRows.filter((row) =>
+        String(row?.status || "").toLowerCase() === "absent"
+      ).length;
+
+      setStats({
+        studentCount: studentRows.length,
+        attendanceTodayCount: attendanceRows.length,
+        presentTodayCount,
+        absentTodayCount,
+        totalOutstanding: extractOutstanding(finance),
+        recentAnnouncements: announcementRows.map((row, i) => ({
+          id: String(row?.id ?? i),
+          title: String(row?.title || "Untitled announcement"),
+          audience: row?.audience ? String(row.audience) : undefined,
+          created_at: row?.created_at ? String(row.created_at) : undefined,
+        })),
+        recentTasks: taskRows.map((row, i) => ({
+          id: String(row?.id ?? i),
+          title: String(row?.title || "Untitled task"),
+          status: row?.status ? String(row.status) : undefined,
+          due_date: row?.due_date ? String(row.due_date) : undefined,
+        })),
+        upcomingEvents: eventRows.map((row, i) => ({
+          id: String(row?.id ?? i),
+          title: String(row?.title || "Untitled event"),
+          date: row?.date ? String(row.date) : undefined,
+          location: row?.location ? String(row.location) : undefined,
+        })),
+      });
+    } catch (e: unknown) {
+      setStatsError(extractErr(e, "Failed to load live dashboard metrics."));
+      setStats(emptyStats);
+    } finally {
+      setStatsLoading(false);
+    }
+  }
+
   useEffect(() => {
     void loadMe();
+    void loadStats();
   }, []);
 
   const isAdmin = user?.role === "admin";
 
   const visibleModules = useMemo(() => {
     return modules.filter((m) => !m.adminOnly || isAdmin);
-  }, [isAdmin]);
-
-  const quickLinks = useMemo(() => {
-    const base = [
-      { label: "Create announcement", href: "/dashboard/announcements", icon: "📢" },
-      { label: "Open finance", href: "/dashboard/finance", icon: "💳" },
-      { label: "Manage report cards", href: "/dashboard/report-cards", icon: "🧾" },
-      { label: "Update settings", href: "/dashboard/settings", icon: "⚙️" },
-    ];
-
-    if (isAdmin) {
-      base.unshift({ label: "Manage users", href: "/dashboard/admin/users", icon: "👥" });
-    }
-
-    return base;
   }, [isAdmin]);
 
   const greetingName = useMemo(() => {
@@ -170,12 +260,6 @@ export default function DashboardPage() {
     if (!user?.role) return "Not assigned";
     return user.role.charAt(0).toUpperCase() + user.role.slice(1);
   }, [user]);
-
-  const totalModules = visibleModules.length;
-
-  const featuredModules = useMemo(() => {
-    return visibleModules.filter((m) => m.priority).slice(0, 4);
-  }, [visibleModules]);
 
   const categories = useMemo(() => {
     return ["All", ...Array.from(new Set(visibleModules.map((m) => m.category)))];
@@ -189,19 +273,39 @@ export default function DashboardPage() {
         module.category.toLowerCase().includes(search.toLowerCase());
 
       const matchesCategory = categoryFilter === "All" || module.category === categoryFilter;
-
       return matchesSearch && matchesCategory;
     });
   }, [search, categoryFilter, visibleModules]);
 
-  const academicCount = visibleModules.filter((m) => m.category === "Academic").length;
-  const adminCount = visibleModules.filter((m) => m.category === "Administration").length;
-  const opsCount = visibleModules.filter((m) => m.category === "Operations").length;
-  const commsCount = visibleModules.filter((m) => m.category === "Communication").length;
-
-  const topFocus = useMemo(() => {
-    return visibleModules.filter((m) => m.priority).slice(0, 3);
+  const featuredModules = useMemo(() => {
+    return visibleModules.filter((m) => m.priority).slice(0, 4);
   }, [visibleModules]);
+
+  const quickLinks = useMemo(() => {
+    const base = [
+      { label: "Create announcement", href: "/dashboard/announcements", icon: "📢" },
+      { label: "Take attendance", href: "/dashboard/attendance", icon: "🕘" },
+      { label: "Add score", href: "/dashboard/scores", icon: "📊" },
+      { label: "Open finance", href: "/dashboard/finance", icon: "💳" },
+    ];
+
+    if (isAdmin) {
+      base.unshift({ label: "Manage users", href: "/dashboard/admin/users", icon: "👥" });
+    }
+
+    return base;
+  }, [isAdmin]);
+
+  const alerts = useMemo(() => {
+    const items: string[] = [];
+
+    if (stats.studentCount === 0) items.push("No students have been added yet.");
+    if (stats.attendanceTodayCount === 0) items.push("No attendance has been submitted today.");
+    if (stats.totalOutstanding > 0) items.push("Outstanding balances need attention.");
+    if (!stats.recentAnnouncements.length) items.push("No announcements are currently posted.");
+
+    return items;
+  }, [stats]);
 
   if (authLoading) {
     return (
@@ -238,31 +342,29 @@ export default function DashboardPage() {
             <div style={styles.eyebrow}>School Platform</div>
             <h1 style={styles.heroTitle}>Dashboard</h1>
             <p style={styles.heroText}>
-              Welcome back <b style={{ color: "#fff" }}>{greetingName}</b>. Your school control center
-              is ready for communication, academics, finance, records, and day-to-day operations.
+              Welcome back <b style={{ color: "#fff" }}>{greetingName}</b>. This is now your live
+              school command center for students, attendance, finance, communication, and daily operations.
             </p>
 
             <div style={styles.heroActions}>
-              <Link href="/dashboard/announcements" style={styles.primaryAction}>
-                Go to Announcements
-              </Link>
-              <Link href="/dashboard/students" style={styles.secondaryAction}>
+              <Link href="/dashboard/students" style={styles.primaryAction}>
                 Open Students
+              </Link>
+              <Link href="/dashboard/attendance" style={styles.secondaryAction}>
+                Take Attendance
+              </Link>
+              <Link href="/dashboard/finance" style={styles.secondaryAction}>
+                Open Finance
               </Link>
               <Link href="/dashboard/settings" style={styles.secondaryAction}>
                 Open Settings
               </Link>
-              {isAdmin ? (
-                <Link href="/dashboard/admin/users" style={styles.secondaryAction}>
-                  Open Admin Users
-                </Link>
-              ) : null}
             </div>
 
             <div style={styles.heroPills}>
-              <HeroPill label="Modules" value={String(totalModules)} />
-              <HeroPill label="Access" value={roleLabel} />
-              <HeroPill label="Workspace" value="Active" />
+              <HeroPill label="Role" value={roleLabel} />
+              <HeroPill label="Students" value={String(stats.studentCount)} />
+              <HeroPill label="Attendance Today" value={String(stats.attendanceTodayCount)} />
             </div>
           </div>
 
@@ -270,44 +372,52 @@ export default function DashboardPage() {
             <div style={styles.heroPanel}>
               <div style={styles.heroPanelTop}>
                 <div>
-                  <div style={styles.heroPanelLabel}>Current Access</div>
-                  <div style={styles.heroPanelValue}>{roleLabel}</div>
+                  <div style={styles.heroPanelLabel}>Outstanding Balance</div>
+                  <div style={styles.heroPanelValue}>{formatMoney(stats.totalOutstanding)}</div>
                 </div>
-                <div style={styles.onlineBadge}>Live</div>
+                <div style={styles.onlineBadge}>{statsLoading ? "Syncing" : "Live"}</div>
               </div>
 
-              <div style={styles.heroPanelSub}>Signed in and ready to build</div>
+              <div style={styles.heroPanelSub}>
+                Present today: {stats.presentTodayCount} • Absent today: {stats.absentTodayCount}
+              </div>
 
               <div style={styles.heroMiniGrid}>
-                <MiniInfoCard label="Modules" value={String(totalModules)} />
-                <MiniInfoCard label="Academic" value={String(academicCount)} />
-                <MiniInfoCard label="Admin" value={String(adminCount)} />
-                <MiniInfoCard label="Operations" value={String(opsCount)} />
+                <MiniInfoCard label="Announcements" value={String(stats.recentAnnouncements.length)} />
+                <MiniInfoCard label="Tasks" value={String(stats.recentTasks.length)} />
+                <MiniInfoCard label="Events" value={String(stats.upcomingEvents.length)} />
+                <MiniInfoCard label="Modules" value={String(visibleModules.length)} />
               </div>
             </div>
           </div>
         </section>
 
+        {statsError ? (
+          <div style={{ marginTop: 18 }}>
+            <ErrorState text={statsError} onRetry={() => void loadStats()} />
+          </div>
+        ) : null}
+
         <section style={styles.statsGrid}>
           <StatCard
-            title="Workspace Modules"
-            value={String(totalModules)}
-            subtitle="Core dashboard sections ready to use and expand"
+            title="Students"
+            value={String(stats.studentCount)}
+            subtitle="Current number of student profiles in the system"
           />
           <StatCard
-            title="Authentication"
-            value="Live"
-            subtitle="Protected routes and session handling enabled"
+            title="Attendance Today"
+            value={String(stats.attendanceTodayCount)}
+            subtitle="Attendance rows submitted for today"
           />
           <StatCard
-            title="Backend"
-            value="Connected"
-            subtitle="Frontend and API are communicating properly"
+            title="Present Today"
+            value={String(stats.presentTodayCount)}
+            subtitle="Students marked present today"
           />
           <StatCard
-            title="Role"
-            value={roleLabel}
-            subtitle="Current access level for this account"
+            title="Outstanding"
+            value={formatMoney(stats.totalOutstanding)}
+            subtitle="Current outstanding balance across finance"
           />
         </section>
 
@@ -346,46 +456,64 @@ export default function DashboardPage() {
           <div style={styles.insightPanel}>
             <div style={styles.insightHeader}>
               <div>
-                <h2 style={styles.sectionTitle}>Workspace Overview</h2>
+                <h2 style={styles.sectionTitle}>Attention Needed</h2>
                 <p style={styles.sectionSub}>
-                  Quick visibility into the structure of your school platform.
+                  Surface the things that need action first.
                 </p>
               </div>
             </div>
 
-            <div style={styles.overviewGrid}>
-              <OverviewCard label="Academic" value={String(academicCount)} sub="Results, records, students, resources" />
-              <OverviewCard label="Administration" value={String(adminCount)} sub="Finance, settings, platform control" />
-              <OverviewCard label="Operations" value={String(opsCount)} sub="Attendance, events, tasks, routines" />
-              <OverviewCard label="Communication" value={String(commsCount)} sub="Announcements and staff updates" />
-            </div>
+            {alerts.length === 0 ? (
+              <EmptyState
+                title="No urgent alerts"
+                text="Everything looks stable right now."
+              />
+            ) : (
+              <div style={styles.focusList}>
+                {alerts.map((item, index) => (
+                  <div key={index} style={styles.focusRow}>
+                    <div style={styles.focusIndex}>!</div>
+                    <div style={{ flex: 1 }}>
+                      <div style={styles.focusRowTitle}>Action Required</div>
+                      <div style={styles.focusRowText}>{item}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div style={styles.insightPanel}>
             <div style={styles.insightHeader}>
               <div>
-                <h2 style={styles.sectionTitle}>Focus Modules</h2>
+                <h2 style={styles.sectionTitle}>Workspace Overview</h2>
                 <p style={styles.sectionSub}>
-                  Best places to keep improving as the platform grows.
+                  A quick look at the shape of your platform.
                 </p>
               </div>
             </div>
 
-            <div style={styles.focusList}>
-              {topFocus.map((item, index) => (
-                <div key={item.href} style={styles.focusRow}>
-                  <div style={styles.focusIndex}>0{index + 1}</div>
-                  <div style={{ flex: 1 }}>
-                    <div style={styles.focusRowTitle}>
-                      {item.icon} {item.title}
-                    </div>
-                    <div style={styles.focusRowText}>{item.desc}</div>
-                  </div>
-                  <Link href={item.href} style={styles.miniInlineLink}>
-                    Open
-                  </Link>
-                </div>
-              ))}
+            <div style={styles.overviewGrid}>
+              <OverviewCard
+                label="Academic"
+                value={String(visibleModules.filter((m) => m.category === "Academic").length)}
+                sub="Students, scores, resources, report cards"
+              />
+              <OverviewCard
+                label="Administration"
+                value={String(visibleModules.filter((m) => m.category === "Administration").length)}
+                sub="Finance, settings, access control"
+              />
+              <OverviewCard
+                label="Operations"
+                value={String(visibleModules.filter((m) => m.category === "Operations").length)}
+                sub="Attendance, tasks, events"
+              />
+              <OverviewCard
+                label="Communication"
+                value={String(visibleModules.filter((m) => m.category === "Communication").length)}
+                sub="Announcements and school updates"
+              />
             </div>
           </div>
         </section>
@@ -396,7 +524,7 @@ export default function DashboardPage() {
               <div>
                 <h2 style={styles.sectionTitle}>Featured Modules</h2>
                 <p style={styles.sectionSub}>
-                  High-impact sections for running the school effectively.
+                  High-impact areas for daily school operations.
                 </p>
               </div>
             </div>
@@ -425,7 +553,7 @@ export default function DashboardPage() {
                 <div>
                   <h2 style={styles.sectionTitle}>All Workspace Modules</h2>
                   <p style={styles.sectionSub}>
-                    Open any section below and continue building the platform.
+                    Every section available in your current school workspace.
                   </p>
                 </div>
               </div>
@@ -466,7 +594,7 @@ export default function DashboardPage() {
           <aside style={styles.sideColumn}>
             <div style={styles.sidePanel}>
               <h3 style={styles.sideTitle}>Quick Actions</h3>
-              <p style={styles.sideSub}>Jump straight into the next key pages.</p>
+              <p style={styles.sideSub}>Jump into the next most common tasks.</p>
 
               <div style={styles.quickList}>
                 {quickLinks.map((item) => (
@@ -481,37 +609,57 @@ export default function DashboardPage() {
             </div>
 
             <div style={styles.sidePanel}>
-              <h3 style={styles.sideTitle}>Platform Status</h3>
-              <div style={styles.statusList}>
-                <StatusRow label="Login" value="Working" good />
-                <StatusRow label="Routing" value="Working" good />
-                <StatusRow label="Backend API" value="Connected" good />
-                <StatusRow label="Dashboard UI" value="Enhanced" good />
-              </div>
-            </div>
-
-            <div style={styles.sidePanel}>
-              <h3 style={styles.sideTitle}>Build Focus</h3>
-              <p style={styles.sideSub}>
-                Best next step is making every module data-rich, role-aware, and visually consistent.
-              </p>
-
-              <div style={styles.focusBox}>
-                <div style={styles.focusBadge}>Next Level</div>
-                <div style={styles.focusText}>
-                  Keep the dashboard as the premium command center, then make each module smarter with
-                  analytics, faster workflows, and better management tools.
+              <h3 style={styles.sideTitle}>Recent Announcements</h3>
+              {!stats.recentAnnouncements.length ? (
+                <EmptyState title="No announcements yet" text="Post your first update from the announcements module." />
+              ) : (
+                <div style={styles.snapshotList}>
+                  {stats.recentAnnouncements.map((item) => (
+                    <div key={item.id} style={styles.snapshotRow}>
+                      <div>
+                        <div style={styles.snapshotLabel}>{item.title}</div>
+                        <div style={{ ...styles.sectionSub, marginTop: 4 }}>
+                          {item.audience || "General"} {item.created_at ? `• ${formatDate(item.created_at)}` : ""}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              </div>
+              )}
             </div>
 
             <div style={styles.sidePanel}>
-              <h3 style={styles.sideTitle}>Smart Snapshot</h3>
+              <h3 style={styles.sideTitle}>Tasks & Events</h3>
               <div style={styles.snapshotList}>
-                <SnapshotRow label="Academic tools" value={String(academicCount)} />
-                <SnapshotRow label="Admin tools" value={String(adminCount)} />
-                <SnapshotRow label="Ops tools" value={String(opsCount)} />
-                <SnapshotRow label="Priority modules" value={String(featuredModules.length)} />
+                {stats.recentTasks.slice(0, 3).map((item) => (
+                  <div key={item.id} style={styles.snapshotRow}>
+                    <div>
+                      <div style={styles.snapshotLabel}>✅ {item.title}</div>
+                      <div style={{ ...styles.sectionSub, marginTop: 4 }}>
+                        {item.status || "Open"} {item.due_date ? `• ${formatDate(item.due_date)}` : ""}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                {stats.upcomingEvents.slice(0, 3).map((item) => (
+                  <div key={item.id} style={styles.snapshotRow}>
+                    <div>
+                      <div style={styles.snapshotLabel}>📅 {item.title}</div>
+                      <div style={{ ...styles.sectionSub, marginTop: 4 }}>
+                        {item.date ? formatDate(item.date) : "Date not set"}
+                        {item.location ? ` • ${item.location}` : ""}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                {!stats.recentTasks.length && !stats.upcomingEvents.length ? (
+                  <EmptyState
+                    title="No tasks or events"
+                    text="Create tasks and events to keep operations visible."
+                  />
+                ) : null}
               </div>
             </div>
           </aside>
@@ -519,6 +667,58 @@ export default function DashboardPage() {
       </div>
     </main>
   );
+}
+
+function settledData(result: PromiseSettledResult<any>) {
+  if (result.status === "fulfilled") return result.value?.data;
+  return null;
+}
+
+function normalizeArray(data: any): any[] {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.items)) return data.items;
+  if (Array.isArray(data?.rows)) return data.rows;
+  if (Array.isArray(data?.results)) return data.results;
+  if (Array.isArray(data?.data)) return data.data;
+  return [];
+}
+
+function extractOutstanding(finance: any): number {
+  if (!finance) return 0;
+
+  const candidates = [
+    finance?.total_outstanding,
+    finance?.outstanding_total,
+    finance?.balance_due_total,
+    finance?.total_balance_due,
+    finance?.totalOutstanding,
+  ];
+
+  for (const value of candidates) {
+    const num = Number(value);
+    if (Number.isFinite(num)) return num;
+  }
+
+  if (Array.isArray(finance)) {
+    return finance.reduce((sum, row) => sum + (Number(row?.balance_due) || Number(row?.balance) || 0), 0);
+  }
+
+  return 0;
+}
+
+function formatMoney(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(value || 0);
+}
+
+function formatDate(value?: string) {
+  if (!value) return "--";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleDateString();
 }
 
 function StatCard({
@@ -587,47 +787,20 @@ function OverviewCard({
   );
 }
 
-function StatusRow({
-  label,
-  value,
-  good,
-}: {
-  label: string;
-  value: string;
-  good?: boolean;
-}) {
-  return (
-    <div style={styles.statusRow}>
-      <span style={styles.statusLabel}>{label}</span>
-      <span
-        style={{
-          ...styles.statusValue,
-          color: good ? "#86efac" : "#fca5a5",
-        }}
-      >
-        {value}
-      </span>
-    </div>
-  );
-}
-
-function SnapshotRow({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
-  return (
-    <div style={styles.snapshotRow}>
-      <span style={styles.snapshotLabel}>{label}</span>
-      <span style={styles.snapshotValue}>{value}</span>
-    </div>
-  );
-}
-
 function extractErr(e: unknown, fallback: string) {
-  const err = e as { message?: string };
+  const err = e as {
+    response?: { data?: { message?: string; error?: string } | string };
+    message?: string;
+  };
+
+  const data = err?.response?.data;
+  if (typeof data === "string") return data;
+  if (data && typeof data === "object") {
+    const msg =
+      (data as { message?: string; error?: string }).message ||
+      (data as { error?: string }).error;
+    if (msg) return msg;
+  }
   return err?.message || fallback;
 }
 
@@ -639,14 +812,12 @@ const styles: Record<string, React.CSSProperties> = {
     background: "linear-gradient(180deg, #020617 0%, #0f172a 42%, #111827 100%)",
     overflow: "hidden",
   },
-
   container: {
     maxWidth: 1440,
     margin: "0 auto",
     position: "relative",
     zIndex: 1,
   },
-
   bgGlowOne: {
     position: "absolute",
     top: -120,
@@ -658,7 +829,6 @@ const styles: Record<string, React.CSSProperties> = {
     filter: "blur(70px)",
     pointerEvents: "none",
   },
-
   bgGlowTwo: {
     position: "absolute",
     bottom: -120,
@@ -670,7 +840,6 @@ const styles: Record<string, React.CSSProperties> = {
     filter: "blur(80px)",
     pointerEvents: "none",
   },
-
   hero: {
     display: "grid",
     gridTemplateColumns: "1.5fr 1fr",
@@ -682,13 +851,11 @@ const styles: Record<string, React.CSSProperties> = {
     boxShadow: "0 20px 60px rgba(0,0,0,0.28)",
     backdropFilter: "blur(12px)",
   },
-
   heroLeft: {
     display: "flex",
     flexDirection: "column",
     justifyContent: "center",
   },
-
   eyebrow: {
     display: "inline-block",
     marginBottom: 10,
@@ -698,7 +865,6 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: 1.2,
     textTransform: "uppercase",
   },
-
   heroTitle: {
     margin: 0,
     fontSize: 40,
@@ -706,7 +872,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#f8fafc",
     lineHeight: 1.05,
   },
-
   heroText: {
     marginTop: 14,
     color: "#cbd5e1",
@@ -714,14 +879,12 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.7,
     maxWidth: 760,
   },
-
   heroActions: {
     display: "flex",
     gap: 12,
     flexWrap: "wrap",
     marginTop: 22,
   },
-
   primaryAction: {
     textDecoration: "none",
     padding: "12px 16px",
@@ -731,7 +894,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     border: "1px solid rgba(255,255,255,0.18)",
   },
-
   secondaryAction: {
     textDecoration: "none",
     padding: "12px 16px",
@@ -741,21 +903,18 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     border: "1px solid rgba(255,255,255,0.12)",
   },
-
   heroPills: {
     display: "flex",
     gap: 10,
     flexWrap: "wrap",
     marginTop: 18,
   },
-
   heroPill: {
     padding: "10px 12px",
     borderRadius: 14,
     border: "1px solid rgba(255,255,255,0.10)",
     background: "rgba(255,255,255,0.05)",
   },
-
   heroPillLabel: {
     fontSize: 11,
     color: "#94a3b8",
@@ -763,34 +922,29 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: "uppercase",
     letterSpacing: 0.6,
   },
-
   heroPillValue: {
     marginTop: 4,
     fontSize: 14,
     color: "#fff",
     fontWeight: 900,
   },
-
   heroRight: {
     display: "flex",
     flexDirection: "column",
     gap: 14,
   },
-
   heroPanel: {
     padding: 18,
     borderRadius: 18,
     background: "rgba(255,255,255,0.06)",
     border: "1px solid rgba(255,255,255,0.10)",
   },
-
   heroPanelTop: {
     display: "flex",
     justifyContent: "space-between",
     gap: 12,
     alignItems: "flex-start",
   },
-
   heroPanelLabel: {
     color: "#94a3b8",
     fontSize: 12,
@@ -798,20 +952,17 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: "uppercase",
     letterSpacing: 0.8,
   },
-
   heroPanelValue: {
     marginTop: 10,
     color: "#ffffff",
     fontSize: 28,
     fontWeight: 900,
   },
-
   heroPanelSub: {
     marginTop: 8,
     color: "#cbd5e1",
     fontSize: 14,
   },
-
   onlineBadge: {
     padding: "7px 10px",
     borderRadius: 999,
@@ -821,41 +972,35 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 12,
     fontWeight: 800,
   },
-
   heroMiniGrid: {
     display: "grid",
     gridTemplateColumns: "1fr 1fr",
     gap: 12,
     marginTop: 16,
   },
-
   miniCard: {
     padding: 14,
     borderRadius: 16,
     background: "rgba(255,255,255,0.05)",
     border: "1px solid rgba(255,255,255,0.10)",
   },
-
   miniLabel: {
     color: "#94a3b8",
     fontSize: 12,
     fontWeight: 700,
   },
-
   miniValue: {
     marginTop: 8,
     color: "#f8fafc",
     fontSize: 20,
     fontWeight: 800,
   },
-
   statsGrid: {
     marginTop: 22,
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
     gap: 16,
   },
-
   statCard: {
     background: "rgba(15,23,42,0.78)",
     border: "1px solid rgba(255,255,255,0.09)",
@@ -863,7 +1008,6 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 20,
     boxShadow: "0 10px 30px rgba(0,0,0,0.18)",
   },
-
   statTitle: {
     color: "#94a3b8",
     fontSize: 13,
@@ -871,21 +1015,18 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
-
   statValue: {
     marginTop: 10,
     fontSize: 28,
     fontWeight: 900,
     color: "#f8fafc",
   },
-
   statSub: {
     marginTop: 8,
     fontSize: 13,
     color: "#cbd5e1",
     lineHeight: 1.5,
   },
-
   controlStrip: {
     marginTop: 24,
     display: "grid",
@@ -897,19 +1038,16 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid rgba(255,255,255,0.09)",
     background: "rgba(15,23,42,0.72)",
   },
-
   searchWrap: {
     display: "flex",
     flexDirection: "column",
     gap: 8,
   },
-
   filterWrap: {
     display: "flex",
     flexDirection: "column",
     gap: 8,
   },
-
   searchLabel: {
     color: "#94a3b8",
     fontSize: 12,
@@ -917,7 +1055,6 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: "uppercase",
     letterSpacing: 0.6,
   },
-
   searchInput: {
     width: "100%",
     padding: "13px 14px",
@@ -928,7 +1065,6 @@ const styles: Record<string, React.CSSProperties> = {
     outline: "none",
     fontSize: 14,
   },
-
   selectInput: {
     width: "100%",
     padding: "13px 14px",
@@ -939,7 +1075,6 @@ const styles: Record<string, React.CSSProperties> = {
     outline: "none",
     fontSize: 14,
   },
-
   summaryChip: {
     padding: "12px 14px",
     borderRadius: 999,
@@ -950,14 +1085,12 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 13,
     whiteSpace: "nowrap",
   },
-
   insightGrid: {
     marginTop: 24,
     display: "grid",
     gridTemplateColumns: "1fr 1fr",
     gap: 18,
   },
-
   insightPanel: {
     background: "rgba(15,23,42,0.78)",
     border: "1px solid rgba(255,255,255,0.09)",
@@ -965,24 +1098,20 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 18,
     boxShadow: "0 10px 30px rgba(0,0,0,0.14)",
   },
-
   insightHeader: {
     marginBottom: 14,
   },
-
   overviewGrid: {
     display: "grid",
     gridTemplateColumns: "1fr 1fr",
     gap: 12,
   },
-
   overviewCard: {
     padding: 16,
     borderRadius: 16,
     background: "rgba(255,255,255,0.05)",
     border: "1px solid rgba(255,255,255,0.08)",
   },
-
   overviewLabel: {
     fontSize: 12,
     color: "#94a3b8",
@@ -990,26 +1119,22 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
-
   overviewValue: {
     marginTop: 8,
     fontSize: 24,
     fontWeight: 900,
     color: "#fff",
   },
-
   overviewSub: {
     marginTop: 8,
     fontSize: 13,
     color: "#cbd5e1",
     lineHeight: 1.5,
   },
-
   focusList: {
     display: "grid",
     gap: 10,
   },
-
   focusRow: {
     display: "flex",
     alignItems: "flex-start",
@@ -1019,7 +1144,6 @@ const styles: Record<string, React.CSSProperties> = {
     background: "rgba(255,255,255,0.05)",
     border: "1px solid rgba(255,255,255,0.08)",
   },
-
   focusIndex: {
     width: 36,
     height: 36,
@@ -1031,28 +1155,17 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 900,
     flexShrink: 0,
   },
-
   focusRowTitle: {
     fontSize: 15,
     fontWeight: 900,
     color: "#fff",
   },
-
   focusRowText: {
     marginTop: 4,
     fontSize: 13,
     color: "#cbd5e1",
     lineHeight: 1.5,
   },
-
-  miniInlineLink: {
-    textDecoration: "none",
-    color: "#93c5fd",
-    fontWeight: 800,
-    fontSize: 13,
-    alignSelf: "center",
-  },
-
   contentGrid: {
     marginTop: 28,
     display: "grid",
@@ -1060,17 +1173,14 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 20,
     alignItems: "start",
   },
-
   mainColumn: {
     minWidth: 0,
   },
-
   sideColumn: {
     display: "flex",
     flexDirection: "column",
     gap: 16,
   },
-
   sectionHeader: {
     marginBottom: 14,
     display: "flex",
@@ -1078,27 +1188,23 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: "center",
     gap: 16,
   },
-
   sectionTitle: {
     margin: 0,
     fontSize: 24,
     color: "#f8fafc",
     fontWeight: 900,
   },
-
   sectionSub: {
     marginTop: 6,
     color: "#94a3b8",
     fontSize: 14,
     lineHeight: 1.5,
   },
-
   featuredGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
     gap: 16,
   },
-
   featuredCard: {
     display: "block",
     textDecoration: "none",
@@ -1108,11 +1214,9 @@ const styles: Record<string, React.CSSProperties> = {
     minHeight: 210,
     boxShadow: "0 16px 40px rgba(0,0,0,0.22)",
   },
-
   featuredIcon: {
     fontSize: 32,
   },
-
   featuredCategory: {
     marginTop: 14,
     fontSize: 11,
@@ -1121,13 +1225,11 @@ const styles: Record<string, React.CSSProperties> = {
     textTransform: "uppercase",
     color: "rgba(255,255,255,0.88)",
   },
-
   featuredTitle: {
     marginTop: 10,
     fontWeight: 900,
     fontSize: 20,
   },
-
   featuredDesc: {
     marginTop: 10,
     fontSize: 14,
@@ -1135,20 +1237,17 @@ const styles: Record<string, React.CSSProperties> = {
     color: "rgba(255,255,255,0.94)",
     minHeight: 64,
   },
-
   featuredAction: {
     marginTop: 18,
     fontSize: 13,
     fontWeight: 800,
     color: "#ffffff",
   },
-
   moduleGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
     gap: 16,
   },
-
   moduleCard: {
     display: "block",
     textDecoration: "none",
@@ -1159,7 +1258,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: "inherit",
     boxShadow: "0 10px 30px rgba(0,0,0,0.14)",
   },
-
   moduleIconWrap: {
     width: 54,
     height: 54,
@@ -1169,11 +1267,9 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     boxShadow: "inset 0 1px 1px rgba(255,255,255,0.2)",
   },
-
   moduleIcon: {
     fontSize: 24,
   },
-
   moduleMetaRow: {
     marginTop: 14,
     display: "flex",
@@ -1181,7 +1277,6 @@ const styles: Record<string, React.CSSProperties> = {
     flexWrap: "wrap",
     alignItems: "center",
   },
-
   moduleCategory: {
     padding: "5px 8px",
     borderRadius: 999,
@@ -1193,7 +1288,6 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: 0.5,
     textTransform: "uppercase",
   },
-
   modulePriority: {
     padding: "5px 8px",
     borderRadius: 999,
@@ -1205,14 +1299,12 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: 0.5,
     textTransform: "uppercase",
   },
-
   moduleTitle: {
     marginTop: 14,
     fontWeight: 900,
     fontSize: 18,
     color: "#f8fafc",
   },
-
   moduleDesc: {
     marginTop: 8,
     color: "#cbd5e1",
@@ -1220,14 +1312,12 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.6,
     minHeight: 44,
   },
-
   moduleAction: {
     marginTop: 14,
     fontSize: 13,
     fontWeight: 800,
     color: "#93c5fd",
   },
-
   sidePanel: {
     background: "rgba(15,23,42,0.78)",
     border: "1px solid rgba(255,255,255,0.09)",
@@ -1235,28 +1325,24 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 18,
     boxShadow: "0 10px 30px rgba(0,0,0,0.14)",
   },
-
   sideTitle: {
     margin: 0,
     fontSize: 18,
     fontWeight: 900,
     color: "#f8fafc",
   },
-
   sideSub: {
     marginTop: 8,
     color: "#cbd5e1",
     fontSize: 14,
     lineHeight: 1.6,
   },
-
   quickList: {
     display: "flex",
     flexDirection: "column",
     gap: 10,
     marginTop: 16,
   },
-
   quickLink: {
     display: "flex",
     justifyContent: "space-between",
@@ -1269,67 +1355,11 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#e2e8f0",
     fontWeight: 700,
   },
-
-  statusList: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 12,
-    marginTop: 16,
-  },
-
-  statusRow: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-    paddingBottom: 10,
-    borderBottom: "1px solid rgba(255,255,255,0.08)",
-  },
-
-  statusLabel: {
-    color: "#cbd5e1",
-    fontSize: 14,
-    fontWeight: 600,
-  },
-
-  statusValue: {
-    fontSize: 14,
-    fontWeight: 800,
-  },
-
-  focusBox: {
-    marginTop: 16,
-    padding: 16,
-    borderRadius: 16,
-    background: "linear-gradient(135deg, rgba(37,99,235,0.20), rgba(168,85,247,0.18))",
-    border: "1px solid rgba(255,255,255,0.10)",
-  },
-
-  focusBadge: {
-    display: "inline-block",
-    padding: "6px 10px",
-    borderRadius: 999,
-    background: "rgba(255,255,255,0.12)",
-    color: "#ffffff",
-    fontSize: 12,
-    fontWeight: 800,
-    textTransform: "uppercase",
-    letterSpacing: 0.6,
-  },
-
-  focusText: {
-    marginTop: 12,
-    color: "#e2e8f0",
-    fontSize: 14,
-    lineHeight: 1.6,
-  },
-
   snapshotList: {
     display: "grid",
     gap: 12,
     marginTop: 16,
   },
-
   snapshotRow: {
     display: "flex",
     justifyContent: "space-between",
@@ -1340,13 +1370,11 @@ const styles: Record<string, React.CSSProperties> = {
     background: "rgba(255,255,255,0.05)",
     border: "1px solid rgba(255,255,255,0.08)",
   },
-
   snapshotLabel: {
-    color: "#cbd5e1",
+    color: "#fff",
     fontSize: 14,
-    fontWeight: 700,
+    fontWeight: 800,
   },
-
   snapshotValue: {
     color: "#fff",
     fontSize: 15,
