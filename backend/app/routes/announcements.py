@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify, send_from_directory
 import os
 import json
 
+from app.audit import log_audit
 import app.bridge as bridge
 from app.decorators import (
     ROLE_ADMIN,
@@ -15,6 +16,7 @@ from app.decorators import (
 
 announcements_bp = Blueprint("announcements_bp", __name__)
 
+
 def _normalize_audience(value: str) -> str:
     v = (value or "all").strip().lower()
     mapping = {
@@ -27,6 +29,7 @@ def _normalize_audience(value: str) -> str:
         "students": "students",
     }
     return mapping.get(v, "")
+
 
 def _attachments_list(a):
     try:
@@ -84,7 +87,7 @@ def announcements_create(slug=None):
     ).strip()
     audience = _normalize_audience(data.get("audience") or "all")
     pinned = bool(data.get("pinned", False))
-    print("ANNOUNCEMENT PAYLOAD:", data)
+
     if not title:
         return jsonify({"error": "title is required"}), 400
 
@@ -108,6 +111,19 @@ def announcements_create(slug=None):
     )
     db.session.add(a)
     db.session.commit()
+
+    log_audit(
+        module="announcements",
+        action="create",
+        entity_type="announcement",
+        entity_id=a.id,
+        entity_label=a.title,
+        details={
+            "audience": a.audience,
+            "pinned": bool(a.pinned),
+            "attachments_count": len(_attachments_list(a)),
+        },
+    )
 
     return jsonify(a.to_dict()), 201
 
@@ -149,6 +165,8 @@ def announcements_update(aid, slug=None):
 
     data = request.get_json(silent=True) or {}
 
+    old_pinned = bool(a.pinned)
+
     if "title" in data:
         a.title = (data.get("title") or "").strip()
     if "description" in data or "body" in data or "message" in data:
@@ -173,6 +191,22 @@ def announcements_update(aid, slug=None):
         return jsonify({"error": "description cannot be empty"}), 400
 
     db.session.commit()
+
+    action_name = "pin_toggle" if "pinned" in data and old_pinned != bool(a.pinned) else "update"
+
+    log_audit(
+        module="announcements",
+        action=action_name,
+        entity_type="announcement",
+        entity_id=a.id,
+        entity_label=a.title,
+        details={
+            "audience": a.audience,
+            "pinned": bool(a.pinned),
+            "updated_fields": list(data.keys()),
+        },
+    )
+
     return jsonify(a.to_dict()), 200
 
 
@@ -192,6 +226,11 @@ def announcements_delete(aid, slug=None):
     if not a:
         return jsonify({"error": "Announcement not found"}), 404
 
+    announcement_title = a.title
+    announcement_audience = a.audience
+    announcement_pinned = bool(a.pinned)
+    attachment_count = len(_attachments_list(a))
+
     for filename in _attachments_list(a):
         try:
             path = os.path.join(bridge.UPLOAD_ANNOUNCEMENTS, filename)
@@ -202,6 +241,20 @@ def announcements_delete(aid, slug=None):
 
     db.session.delete(a)
     db.session.commit()
+
+    log_audit(
+        module="announcements",
+        action="delete",
+        entity_type="announcement",
+        entity_id=aid,
+        entity_label=announcement_title,
+        details={
+            "audience": announcement_audience,
+            "pinned": announcement_pinned,
+            "attachments_count": attachment_count,
+        },
+    )
+
     return jsonify({"message": "Announcement deleted"}), 200
 
 
@@ -242,7 +295,20 @@ def announcements_upload_attachment(aid, slug=None):
     a.attachments_json = json.dumps(attachments)
 
     db.session.commit()
-    return jsonify({"message": "Attachment uploaded", "filename": stored_name}), 201
+
+    log_audit(
+        module="announcements",
+        action="upload_attachment",
+        entity_type="announcement",
+        entity_id=a.id,
+        entity_label=a.title,
+        details={
+            "filename": stored_name,
+            "attachments_count": len(attachments),
+        },
+    )
+
+    return jsonify(a.to_dict()), 201
 
 
 @announcements_bp.route("/api/s/<slug>/announcements/<int:aid>/attachments/<path:filename>", methods=["DELETE"])
@@ -276,7 +342,20 @@ def announcements_delete_attachment(aid, filename, slug=None):
         pass
 
     db.session.commit()
-    return jsonify({"message": "Attachment deleted"}), 200
+
+    log_audit(
+        module="announcements",
+        action="delete_attachment",
+        entity_type="announcement",
+        entity_id=a.id,
+        entity_label=a.title,
+        details={
+            "filename": filename,
+            "attachments_count": len(attachments),
+        },
+    )
+
+    return jsonify(a.to_dict()), 200
 
 
 @announcements_bp.route("/announcement-attachments/<path:filename>", methods=["GET"])

@@ -29,6 +29,7 @@ type AuditSummary = {
     finance: number;
     resources: number;
     settings: number;
+    announcements: number;
   };
   by_action: Record<string, number>;
   latest: AuditRow[];
@@ -50,6 +51,7 @@ const EMPTY_SUMMARY: AuditSummary = {
     finance: 0,
     resources: 0,
     settings: 0,
+    announcements: 0,
   },
   by_action: {},
   latest: [],
@@ -64,7 +66,7 @@ const EMPTY_PAGINATION: AuditPagination = {
   has_next: false,
 };
 
-const MODULE_OPTIONS = ["", "students", "finance", "resources", "settings"];
+const MODULE_OPTIONS = ["", "students", "finance", "resources", "settings", "announcements"];
 const ACTION_OPTIONS = [
   "",
   "create",
@@ -79,6 +81,9 @@ const ACTION_OPTIONS = [
   "export_statement",
   "open_receipt_pdf",
   "download",
+  "pin_toggle",
+  "upload_attachment",
+  "delete_attachment",
 ];
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
@@ -125,11 +130,11 @@ export default function ActivityPage() {
 
       const logsData = logsRes.data || {};
       const nextRows: AuditRow[] = Array.isArray(logsData.items) ? logsData.items : [];
-      
+
       setRows(nextRows);
       setPagination(normalizePagination(logsData.pagination));
       setSummary(normalizeSummary(summaryRes.data));
-      
+
       setSelectedRow((prev) => {
         if (!prev) return nextRows[0] || null;
         return nextRows.find((r: AuditRow) => r.id === prev.id) || nextRows[0] || null;
@@ -164,6 +169,7 @@ export default function ActivityPage() {
       { label: "Finance", value: summary.by_module.finance, accent: "amber" as const },
       { label: "Resources", value: summary.by_module.resources, accent: "purple" as const },
       { label: "Settings", value: summary.by_module.settings, accent: "green" as const },
+      { label: "Announcements", value: summary.by_module.announcements, accent: "rose" as const },
     ];
   }, [summary]);
 
@@ -237,7 +243,7 @@ export default function ActivityPage() {
             <div style={styles.eyebrow}>Admin Visibility</div>
             <h1 style={styles.heroTitle}>Activity Log</h1>
             <p style={styles.heroText}>
-              Track important changes across students, finance, resources, and settings.
+              Track important changes across students, finance, resources, settings, and announcements.
               This gives administrators a clean audit trail of who did what and when.
             </p>
 
@@ -381,7 +387,7 @@ export default function ActivityPage() {
                 <div style={{ padding: 18 }}>
                   <EmptyState
                     title="No activity found"
-                    text="Try changing filters or perform an action in students, finance, resources, or settings."
+                    text="Try changing filters or perform an action in students, finance, resources, settings, or announcements."
                   />
                 </div>
               ) : (
@@ -517,6 +523,7 @@ function normalizeSummary(data: any): AuditSummary {
       finance: Number(data?.by_module?.finance || 0),
       resources: Number(data?.by_module?.resources || 0),
       settings: Number(data?.by_module?.settings || 0),
+      announcements: Number(data?.by_module?.announcements || 0),
     },
     by_action: data?.by_action && typeof data.by_action === "object" ? data.by_action : {},
     latest: Array.isArray(data?.latest) ? data.latest : [],
@@ -572,6 +579,7 @@ function iconForModule(module: string) {
     finance: "💳",
     resources: "📚",
     settings: "⚙️",
+    announcements: "📢",
   };
   return map[module] || "🧭";
 }
@@ -587,7 +595,11 @@ function moduleBadgeStyle(module: string): CSSProperties {
           ? "rgba(245,158,11,0.14)"
           : module === "resources"
             ? "rgba(56,189,248,0.14)"
-            : "rgba(148,163,184,0.14)",
+            : module === "settings"
+              ? "rgba(34,197,94,0.14)"
+              : module === "announcements"
+                ? "rgba(251,113,133,0.14)"
+                : "rgba(148,163,184,0.14)",
     border: "1px solid rgba(255,255,255,0.10)",
     color: "#e2e8f0",
     fontSize: 11,
@@ -613,13 +625,14 @@ function StatCard({
 }: {
   label: string;
   value: string;
-  accent: "blue" | "amber" | "purple" | "green";
+  accent: "blue" | "amber" | "purple" | "green" | "rose";
 }) {
   const accentMap: Record<string, string> = {
     blue: "rgba(96,165,250,0.30)",
     amber: "rgba(245,158,11,0.30)",
     purple: "rgba(168,85,247,0.30)",
     green: "rgba(34,197,94,0.30)",
+    rose: "rgba(251,113,133,0.30)",
   };
 
   return (

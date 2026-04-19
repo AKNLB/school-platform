@@ -135,6 +135,7 @@ def get_audit_logs_summary(slug=None):
             "finance": count_for("finance"),
             "resources": count_for("resources"),
             "settings": count_for("settings"),
+            "announcements": count_for("announcements"),
         },
         "by_action": actions,
         "latest": [_row_to_dict(r) for r in latest],
