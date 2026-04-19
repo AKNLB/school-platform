@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 
+from app.audit import log_audit
 import app.bridge as bridge
 from app.decorators import (
     ROLE_ADMIN,
@@ -135,6 +136,20 @@ def api_tasks(slug=None):
     db.session.add(t)
     db.session.commit()
 
+    log_audit(
+        module="tasks",
+        action="create",
+        entity_type="task",
+        entity_id=t.id,
+        entity_label=t.title,
+        details={
+            "status": getattr(t, "status", None),
+            "priority": getattr(t, "priority", None),
+            "assigned_to_user_id": getattr(t, "assigned_to_user_id", None),
+            "due_date": t.due_date.isoformat() if getattr(t, "due_date", None) else None,
+        },
+    )
+
     return jsonify(_task_to_dict(t)), 201
 
 
@@ -155,8 +170,27 @@ def api_task_modify(tid, slug=None):
         return jsonify({"error": "Task not found"}), 404
 
     if request.method == "DELETE":
+        task_title = getattr(t, "title", "")
+        task_status = getattr(t, "status", "")
+        task_priority = getattr(t, "priority", "")
+        task_due_date = t.due_date.isoformat() if getattr(t, "due_date", None) else None
+
         db.session.delete(t)
         db.session.commit()
+
+        log_audit(
+            module="tasks",
+            action="delete",
+            entity_type="task",
+            entity_id=tid,
+            entity_label=task_title,
+            details={
+                "status": task_status,
+                "priority": task_priority,
+                "due_date": task_due_date,
+            },
+        )
+
         return jsonify({"message": "Task deleted"}), 200
 
     data = request.get_json(silent=True) or {}
@@ -203,4 +237,20 @@ def api_task_modify(tid, slug=None):
                 return jsonify({"error": "Invalid due_date"}), 400
 
     db.session.commit()
+
+    log_audit(
+        module="tasks",
+        action="update",
+        entity_type="task",
+        entity_id=t.id,
+        entity_label=t.title,
+        details={
+            "updated_fields": list(data.keys()),
+            "status": getattr(t, "status", None),
+            "priority": getattr(t, "priority", None),
+            "assigned_to_user_id": getattr(t, "assigned_to_user_id", None),
+            "due_date": t.due_date.isoformat() if getattr(t, "due_date", None) else None,
+        },
+    )
+
     return jsonify(_task_to_dict(t)), 200
