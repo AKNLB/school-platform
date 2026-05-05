@@ -31,6 +31,7 @@ type AuditSummary = {
     settings: number;
     announcements: number;
     tasks: number;
+    events: number;
   };
   by_action: Record<string, number>;
   latest: AuditRow[];
@@ -54,6 +55,7 @@ const EMPTY_SUMMARY: AuditSummary = {
     settings: 0,
     announcements: 0,
     tasks: 0,
+    events: 0,
   },
   by_action: {},
   latest: [],
@@ -68,7 +70,7 @@ const EMPTY_PAGINATION: AuditPagination = {
   has_next: false,
 };
 
-const MODULE_OPTIONS = ["", "students", "finance", "resources", "settings", "announcements", "tasks"];
+const MODULE_OPTIONS = ["", "students", "finance", "resources", "settings", "announcements", "tasks", "events"];
 const ACTION_OPTIONS = [
   "",
   "create",
@@ -173,6 +175,7 @@ export default function ActivityPage() {
       { label: "Settings", value: summary.by_module.settings, accent: "green" as const },
       { label: "Announcements", value: summary.by_module.announcements, accent: "rose" as const },
       { label: "Tasks", value: summary.by_module.tasks, accent: "cyan" as const },
+      { label: "Events", value: summary.by_module.events, accent: "indigo" as const },
     ];
   }, [summary]);
 
@@ -246,7 +249,7 @@ export default function ActivityPage() {
             <div style={styles.eyebrow}>Admin Visibility</div>
             <h1 style={styles.heroTitle}>Activity Log</h1>
             <p style={styles.heroText}>
-              Track important changes across students, finance, resources, settings, announcements, and tasks.
+              Track important changes across students, finance, resources, settings, announcements, tasks, and events.
               This gives administrators a clean audit trail of who did what and when.
             </p>
 
@@ -390,7 +393,7 @@ export default function ActivityPage() {
                 <div style={{ padding: 18 }}>
                   <EmptyState
                     title="No activity found"
-                    text="Try changing filters or perform an action in students, finance, resources, settings, announcements, or tasks."
+                    text="Try changing filters or perform an action in students, finance, resources, settings, announcements, tasks, or events."
                   />
                 </div>
               ) : (
@@ -528,6 +531,7 @@ function normalizeSummary(data: any): AuditSummary {
       settings: Number(data?.by_module?.settings || 0),
       announcements: Number(data?.by_module?.announcements || 0),
       tasks: Number(data?.by_module?.tasks || 0),
+      events: Number(data?.by_module?.events || 0),
     },
     by_action: data?.by_action && typeof data.by_action === "object" ? data.by_action : {},
     latest: Array.isArray(data?.latest) ? data.latest : [],
@@ -585,6 +589,7 @@ function iconForModule(module: string) {
     settings: "⚙️",
     announcements: "📢",
     tasks: "✅",
+    events: "📅",
   };
   return map[module] || "🧭";
 }
@@ -606,7 +611,9 @@ function moduleBadgeStyle(module: string): CSSProperties {
                 ? "rgba(251,113,133,0.14)"
                 : module === "tasks"
                   ? "rgba(34,211,238,0.14)"
-                  : "rgba(148,163,184,0.14)",
+                  : module === "events"
+                    ? "rgba(99,102,241,0.14)"
+                    : "rgba(148,163,184,0.14)",
     border: "1px solid rgba(255,255,255,0.10)",
     color: "#e2e8f0",
     fontSize: 11,
@@ -632,7 +639,7 @@ function StatCard({
 }: {
   label: string;
   value: string;
-  accent: "blue" | "amber" | "purple" | "green" | "rose" | "cyan";
+  accent: "blue" | "amber" | "purple" | "green" | "rose" | "cyan" | "indigo";
 }) {
   const accentMap: Record<string, string> = {
     blue: "rgba(96,165,250,0.30)",
@@ -641,6 +648,7 @@ function StatCard({
     green: "rgba(34,197,94,0.30)",
     rose: "rgba(251,113,133,0.30)",
     cyan: "rgba(34,211,238,0.30)",
+    indigo: "rgba(99,102,241,0.30)",
   };
 
   return (

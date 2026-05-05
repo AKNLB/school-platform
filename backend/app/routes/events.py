@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 
+from app.audit import log_audit
 import app.bridge as bridge
 from app.decorators import (
     ROLE_ADMIN,
@@ -146,6 +147,21 @@ def events_collection(slug=None):
     db.session.add(event)
     db.session.commit()
 
+    log_audit(
+        module="events",
+        action="create",
+        entity_type="event",
+        entity_id=event.id,
+        entity_label=event.title,
+        details={
+            "date": event.date.isoformat() if getattr(event, "date", None) else None,
+            "start_time": getattr(event, "start_time", None),
+            "end_time": getattr(event, "end_time", None),
+            "location": getattr(event, "location", ""),
+            "audience": getattr(event, "audience", "all"),
+        },
+    )
+
     return jsonify(_event_to_dict(event)), 201
 
 
@@ -166,8 +182,31 @@ def events_item(eid, slug=None):
         return jsonify({"error": "Event not found"}), 404
 
     if request.method == "DELETE":
+        event_title = getattr(event, "title", "")
+        event_date = event.date.isoformat() if getattr(event, "date", None) else None
+        event_start_time = getattr(event, "start_time", None)
+        event_end_time = getattr(event, "end_time", None)
+        event_location = getattr(event, "location", "")
+        event_audience = getattr(event, "audience", "all")
+
         db.session.delete(event)
         db.session.commit()
+
+        log_audit(
+            module="events",
+            action="delete",
+            entity_type="event",
+            entity_id=eid,
+            entity_label=event_title,
+            details={
+                "date": event_date,
+                "start_time": event_start_time,
+                "end_time": event_end_time,
+                "location": event_location,
+                "audience": event_audience,
+            },
+        )
+
         return jsonify({"message": "Event deleted"}), 200
 
     data = request.get_json(silent=True) or {}
@@ -213,4 +252,21 @@ def events_item(eid, slug=None):
             return jsonify({"error": "Invalid end_time"}), 400
 
     db.session.commit()
+
+    log_audit(
+        module="events",
+        action="update",
+        entity_type="event",
+        entity_id=event.id,
+        entity_label=event.title,
+        details={
+            "updated_fields": list(data.keys()),
+            "date": event.date.isoformat() if getattr(event, "date", None) else None,
+            "start_time": getattr(event, "start_time", None),
+            "end_time": getattr(event, "end_time", None),
+            "location": getattr(event, "location", ""),
+            "audience": getattr(event, "audience", "all"),
+        },
+    )
+
     return jsonify(_event_to_dict(event)), 200
