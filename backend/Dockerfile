@@ -31,4 +31,4 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY . /app/
 
 EXPOSE 1994
-CMD ["gunicorn", "-k", "eventlet", "-w", "1", "-b", "0.0.0.0:1994", "work:app", "--timeout", "120"]
+CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:1994", "work:app", "--timeout", "120"]
