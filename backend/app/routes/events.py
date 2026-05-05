@@ -14,6 +14,7 @@ from app.decorators import (
 
 events_bp = Blueprint("events_bp", __name__)
 
+
 def _safe_iso_date(value):
     if value in (None, ""):
         return None
@@ -21,20 +22,23 @@ def _safe_iso_date(value):
         return value.isoformat()
     return str(value)
 
+
 def _event_to_dict(e):
     if hasattr(e, "to_dict") and callable(e.to_dict):
         return e.to_dict()
+
+    created_at = getattr(e, "created_at", None)
 
     return {
         "id": e.id,
         "title": getattr(e, "title", ""),
         "description": getattr(e, "description", ""),
-        "date": getattr(e, "date", None).isoformat() if getattr(e, "date", None) else None,
+        "date": _safe_iso_date(getattr(e, "date", None)),
         "start_time": getattr(e, "start_time", None),
         "end_time": getattr(e, "end_time", None),
         "location": getattr(e, "location", ""),
         "audience": getattr(e, "audience", "all"),
-        "created_at": getattr(e, "created_at", None).isoformat() if getattr(e, "created_at", None) else None,
+        "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else (str(created_at) if created_at else None),
     }
 
 
@@ -160,7 +164,7 @@ def events_collection(slug=None):
         entity_id=event.id,
         entity_label=event.title,
         details={
-            "date": event.date.isoformat() if getattr(event, "date", None) else None,
+            "date": _safe_iso_date(getattr(event, "date", None)),
             "start_time": getattr(event, "start_time", None),
             "end_time": getattr(event, "end_time", None),
             "location": getattr(event, "location", ""),
