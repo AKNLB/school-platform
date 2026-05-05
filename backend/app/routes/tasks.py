@@ -116,9 +116,13 @@ def api_tasks(slug=None):
         "school_id": current_school_id(),
         "title": title,
         "description": description,
-        "status": status,
-        "priority": priority,
     }
+
+    if hasattr(Task, "status"):
+        kwargs["status"] = status
+
+    if hasattr(Task, "priority"):
+        kwargs["priority"] = priority
 
     if hasattr(Task, "created_by_user_id"):
         kwargs["created_by_user_id"] = getattr(user, "id", None)
