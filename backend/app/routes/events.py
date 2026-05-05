@@ -14,6 +14,12 @@ from app.decorators import (
 
 events_bp = Blueprint("events_bp", __name__)
 
+def _safe_iso_date(value):
+    if value in (None, ""):
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
 
 def _event_to_dict(e):
     if hasattr(e, "to_dict") and callable(e.to_dict):
@@ -183,7 +189,7 @@ def events_item(eid, slug=None):
 
     if request.method == "DELETE":
         event_title = getattr(event, "title", "")
-        event_date = event.date.isoformat() if getattr(event, "date", None) else None
+        event_date = _safe_iso_date(getattr(event, "date", None))
         event_start_time = getattr(event, "start_time", None)
         event_end_time = getattr(event, "end_time", None)
         event_location = getattr(event, "location", "")
@@ -261,7 +267,7 @@ def events_item(eid, slug=None):
         entity_label=event.title,
         details={
             "updated_fields": list(data.keys()),
-            "date": event.date.isoformat() if getattr(event, "date", None) else None,
+            "date": _safe_iso_date(getattr(event, "date", None)),
             "start_time": getattr(event, "start_time", None),
             "end_time": getattr(event, "end_time", None),
             "location": getattr(event, "location", ""),
