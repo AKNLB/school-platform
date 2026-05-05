@@ -1,7 +1,10 @@
 from flask import Blueprint, request, jsonify, url_for, send_from_directory
 from werkzeug.utils import secure_filename
 import os
+import csv
+import io
 from datetime import datetime
+
 from app.audit import log_audit
 import app.bridge as bridge
 from app.decorators import (
@@ -16,6 +19,7 @@ from app.decorators import (
 )
 
 students_bp = Blueprint("students_bp", __name__)
+
 
 def _student_to_dict(student):
     return {
@@ -36,6 +40,21 @@ def _student_to_dict(student):
             else None
         ),
     }
+
+
+def _clean_cell(row, key, default=""):
+    value = row.get(key, default)
+    if value is None:
+        return default
+    return str(value).strip()
+
+
+def _parse_grade(value):
+    try:
+        return int(str(value or "1").strip())
+    except Exception:
+        return 1
+
 
 @students_bp.route("/api/s/<slug>/students", methods=["GET", "POST"])
 @students_bp.route("/api/students", methods=["GET", "POST"])
@@ -84,6 +103,155 @@ def students(slug=None):
     )
 
     return jsonify({"id": s.id}), 201
+
+
+@students_bp.route("/api/s/<slug>/students/import", methods=["POST"])
+@students_bp.route("/api/students/import", methods=["POST"])
+@school_context_required
+@roles_required(ROLE_ADMIN)
+@bridge.limiter.limit("10 per hour")
+def import_students_csv(slug=None):
+    Student = bridge.Student
+    db = bridge.db
+    sid = current_school_id()
+
+    file = request.files.get("file")
+    if not file or not file.filename:
+        return jsonify({"error": "CSV file is required"}), 400
+
+    filename = file.filename.lower()
+    if not filename.endswith(".csv"):
+        return jsonify({"error": "Only .csv files are supported for now"}), 400
+
+    try:
+        raw = file.read().decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return jsonify({"error": "Could not read CSV. Please save it as UTF-8 CSV."}), 400
+
+    reader = csv.DictReader(io.StringIO(raw))
+
+    if not reader.fieldnames:
+        return jsonify({"error": "CSV has no header row"}), 400
+
+    normalized_headers = {h.strip().lower(): h for h in reader.fieldnames if h}
+    required = ["name", "grade"]
+    missing = [h for h in required if h not in normalized_headers]
+
+    if missing:
+        return jsonify({
+            "error": f"Missing required column(s): {', '.join(missing)}",
+            "required_columns": required,
+            "optional_columns": [
+                "dob",
+                "gender",
+                "email",
+                "national_id",
+                "guardian_name",
+                "guardian_contact",
+                "home_address",
+                "emergency_contact",
+            ],
+        }), 400
+
+    created = 0
+    skipped = 0
+    errors = []
+    created_students = []
+
+    for index, row in enumerate(reader, start=2):
+        row = {str(k).strip().lower(): v for k, v in row.items() if k is not None}
+
+        name = _clean_cell(row, "name")
+        grade = _parse_grade(_clean_cell(row, "grade", "1"))
+
+        if not name:
+            skipped += 1
+            errors.append({
+                "row": index,
+                "error": "Missing student name",
+            })
+            continue
+
+        existing = Student.query.filter_by(
+            school_id=sid,
+            name=name,
+            grade=grade,
+        ).first()
+
+        if existing:
+            skipped += 1
+            errors.append({
+                "row": index,
+                "name": name,
+                "grade": grade,
+                "error": "Duplicate student skipped",
+            })
+            continue
+
+        dob_raw = _clean_cell(row, "dob")
+        dob = None
+
+        if dob_raw:
+            try:
+                dob = bridge.parse_date(dob_raw)
+            except Exception:
+                skipped += 1
+                errors.append({
+                    "row": index,
+                    "name": name,
+                    "error": "Invalid dob. Use YYYY-MM-DD.",
+                })
+                continue
+
+        student = Student(
+            school_id=sid,
+            name=name,
+            dob=dob,
+            gender=_clean_cell(row, "gender") or None,
+            national_id=_clean_cell(row, "national_id") or None,
+            grade=grade,
+            email=_clean_cell(row, "email") or None,
+            guardian_name=_clean_cell(row, "guardian_name") or None,
+            guardian_contact=_clean_cell(row, "guardian_contact") or None,
+            home_address=_clean_cell(row, "home_address") or None,
+            emergency_contact=_clean_cell(row, "emergency_contact") or None,
+        )
+
+        db.session.add(student)
+        created_students.append(student)
+        created += 1
+
+    db.session.commit()
+
+    log_audit(
+        module="students",
+        action="bulk_import",
+        entity_type="student_import",
+        entity_id=None,
+        entity_label="Bulk Student Import",
+        details={
+            "created": created,
+            "skipped": skipped,
+            "errors_count": len(errors),
+            "sample_created": [
+                {
+                    "id": s.id,
+                    "name": s.name,
+                    "grade": s.grade,
+                }
+                for s in created_students[:10]
+            ],
+        },
+    )
+
+    return jsonify({
+        "message": "Import completed",
+        "created": created,
+        "skipped": skipped,
+        "errors": errors[:100],
+        "created_students": [_student_to_dict(s) for s in created_students[:50]],
+    }), 200
+
 
 @students_bp.route("/api/s/<slug>/students/<int:student_id>", methods=["GET", "PUT", "DELETE"])
 @students_bp.route("/api/students/<int:student_id>", methods=["GET", "PUT", "DELETE"])
@@ -141,7 +309,6 @@ def modify_student(student_id, slug=None):
 
         return jsonify({"message": "Student updated"}), 200
 
-    # DELETE
     student_name = s.name
     student_grade = s.grade
 
@@ -158,6 +325,7 @@ def modify_student(student_id, slug=None):
     )
 
     return jsonify({"message": "Student deleted"}), 200
+
 
 @students_bp.route("/api/s/<slug>/students/<int:student_id>/photo", methods=["POST"])
 @students_bp.route("/api/students/<int:student_id>/photo", methods=["POST"])
@@ -209,6 +377,7 @@ def upload_student_photo(student_id, slug=None):
         "message": "Photo uploaded",
         "photo_url": url_for("students_bp.serve_photo", filename=fname, _external=True)
     }), 201
+
 
 @students_bp.route("/photos/<filename>")
 def serve_photo(filename):
