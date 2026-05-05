@@ -1,12 +1,59 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, Response
 import json
 from datetime import datetime, timedelta
 
 import app.bridge as bridge
 from app.decorators import ROLE_ADMIN, current_school_id, roles_required, school_context_required
-
+import csv
+import io
+from flask import Blueprint, request, jsonify, Response
 audit_bp = Blueprint("audit_bp", __name__)
 
+def _apply_audit_filters(qs, AuditLog):
+    module = (request.args.get("module") or "").strip().lower()
+    action = (request.args.get("action") or "").strip().lower()
+    entity_type = (request.args.get("entity_type") or "").strip().lower()
+    search = (request.args.get("q") or "").strip().lower()
+
+    start_date = (request.args.get("start_date") or "").strip()
+    end_date = (request.args.get("end_date") or "").strip()
+
+    if module:
+        qs = qs.filter(AuditLog.module == module)
+
+    if action:
+        qs = qs.filter(AuditLog.action == action)
+
+    if entity_type:
+        qs = qs.filter(AuditLog.entity_type == entity_type)
+
+    if start_date:
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            qs = qs.filter(AuditLog.created_at >= start_dt)
+        except ValueError:
+            return None, jsonify({"error": "Invalid start_date. Use YYYY-MM-DD"}), 400
+
+    if end_date:
+        try:
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+            qs = qs.filter(AuditLog.created_at < end_dt)
+        except ValueError:
+            return None, jsonify({"error": "Invalid end_date. Use YYYY-MM-DD"}), 400
+
+    if search:
+        like = f"%{search}%"
+        qs = qs.filter(
+            (AuditLog.user_email.ilike(like)) |
+            (AuditLog.module.ilike(like)) |
+            (AuditLog.action.ilike(like)) |
+            (AuditLog.entity_type.ilike(like)) |
+            (AuditLog.entity_label.ilike(like)) |
+            (AuditLog.entity_id.ilike(like)) |
+            (AuditLog.details_json.ilike(like))
+        )
+
+    return qs, None, None
 
 def _row_to_dict(row):
     details = {}
@@ -142,3 +189,60 @@ def get_audit_logs_summary(slug=None):
         "by_action": actions,
         "latest": [_row_to_dict(r) for r in latest],
     }), 200
+
+@audit_bp.route("/api/s/<slug>/audit-logs/export.csv", methods=["GET"])
+@audit_bp.route("/api/audit-logs/export.csv", methods=["GET"])
+@school_context_required
+@roles_required(ROLE_ADMIN)
+def export_audit_logs_csv(slug=None):
+    AuditLog = bridge.AuditLog
+
+    qs = AuditLog.query.filter_by(school_id=current_school_id())
+    qs, error_response, status = _apply_audit_filters(qs, AuditLog)
+
+    if error_response is not None:
+        return error_response, status
+
+    rows = qs.order_by(AuditLog.created_at.desc()).limit(5000).all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    writer.writerow([
+        "ID",
+        "Created At",
+        "Module",
+        "Action",
+        "Entity Type",
+        "Entity ID",
+        "Entity Label",
+        "User Email",
+        "User ID",
+        "IP Address",
+        "Details JSON",
+    ])
+
+    for r in rows:
+        writer.writerow([
+            r.id,
+            r.created_at.isoformat() if r.created_at else "",
+            r.module or "",
+            r.action or "",
+            r.entity_type or "",
+            r.entity_id or "",
+            r.entity_label or "",
+            r.user_email or "",
+            r.user_id or "",
+            r.ip_address or "",
+            r.details_json or "",
+        ])
+
+    filename = f"audit_logs_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}"
+        },
+    )

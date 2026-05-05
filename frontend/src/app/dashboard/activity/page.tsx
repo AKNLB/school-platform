@@ -70,7 +70,17 @@ const EMPTY_PAGINATION: AuditPagination = {
   has_next: false,
 };
 
-const MODULE_OPTIONS = ["", "students", "finance", "resources", "settings", "announcements", "tasks", "events"];
+const MODULE_OPTIONS = [
+  "",
+  "students",
+  "finance",
+  "resources",
+  "settings",
+  "announcements",
+  "tasks",
+  "events",
+];
+
 const ACTION_OPTIONS = [
   "",
   "create",
@@ -133,7 +143,9 @@ export default function ActivityPage() {
       ]);
 
       const logsData = logsRes.data || {};
-      const nextRows: AuditRow[] = Array.isArray(logsData.items) ? logsData.items : [];
+      const nextRows: AuditRow[] = Array.isArray(logsData.items)
+        ? logsData.items
+        : [];
 
       setRows(nextRows);
       setPagination(normalizePagination(logsData.pagination));
@@ -153,6 +165,23 @@ export default function ActivityPage() {
       setLoading(false);
       setBusy(false);
     }
+  }
+
+  function exportCsv() {
+    const sp = new URLSearchParams();
+
+    if (moduleFilter) sp.set("module", moduleFilter);
+    if (actionFilter) sp.set("action", actionFilter);
+    if (search.trim()) sp.set("q", search.trim());
+    if (startDate) sp.set("start_date", startDate);
+    if (endDate) sp.set("end_date", endDate);
+
+    const query = sp.toString();
+    const url = query
+      ? `/api/audit-logs/export.csv?${query}`
+      : "/api/audit-logs/export.csv";
+
+    window.open(url, "_blank");
   }
 
   useEffect(() => {
@@ -249,8 +278,9 @@ export default function ActivityPage() {
             <div style={styles.eyebrow}>Admin Visibility</div>
             <h1 style={styles.heroTitle}>Activity Log</h1>
             <p style={styles.heroText}>
-              Track important changes across students, finance, resources, settings, announcements, tasks, and events.
-              This gives administrators a clean audit trail of who did what and when.
+              Track important changes across students, finance, resources, settings,
+              announcements, tasks, and events. This gives administrators a clean audit trail
+              of who did what and when.
             </p>
 
             <div style={styles.heroPills}>
@@ -262,15 +292,30 @@ export default function ActivityPage() {
           </div>
 
           <div style={styles.heroSide}>
-            <button onClick={() => void loadAudit(page, pageSize)} style={styles.primaryBtn} disabled={busy}>
-              {busy ? "Refreshing..." : "Refresh Activity"}
-            </button>
+            <div style={styles.heroButtonGroup}>
+              <button onClick={exportCsv} style={styles.secondaryBtn} disabled={busy}>
+                Export CSV
+              </button>
+
+              <button
+                onClick={() => void loadAudit(page, pageSize)}
+                style={styles.primaryBtn}
+                disabled={busy}
+              >
+                {busy ? "Refreshing..." : "Refresh Activity"}
+              </button>
+            </div>
           </div>
         </section>
 
         <section style={styles.statsGrid}>
           {recentByModule.map((item) => (
-            <StatCard key={item.label} label={item.label} value={String(item.value)} accent={item.accent} />
+            <StatCard
+              key={item.label}
+              label={item.label}
+              value={String(item.value)}
+              accent={item.accent}
+            />
           ))}
         </section>
 
@@ -371,6 +416,9 @@ export default function ActivityPage() {
                   <button onClick={clearFilters} style={styles.secondaryBtn} disabled={busy}>
                     Clear
                   </button>
+                  <button onClick={exportCsv} style={styles.secondaryBtn} disabled={busy}>
+                    Export Filtered CSV
+                  </button>
                 </div>
               </div>
             </section>
@@ -415,7 +463,8 @@ export default function ActivityPage() {
                           </div>
 
                           <div style={styles.timelineTitle}>
-                            {row.entity_label || `${titleize(row.entity_type)} #${row.entity_id || "--"}`}
+                            {row.entity_label ||
+                              `${titleize(row.entity_type)} #${row.entity_id || "--"}`}
                           </div>
 
                           <div style={styles.timelineMeta}>
@@ -769,6 +818,11 @@ const styles: Record<string, CSSProperties> = {
     display: "flex",
     alignItems: "flex-start",
   },
+  heroButtonGroup: {
+    display: "flex",
+    gap: 10,
+    flexWrap: "wrap",
+  },
   primaryBtn: {
     padding: "12px 16px",
     borderRadius: 14,
@@ -887,6 +941,7 @@ const styles: Record<string, CSSProperties> = {
     gap: 10,
     alignItems: "flex-end",
     gridColumn: "1 / -1",
+    flexWrap: "wrap",
   },
   paginationInfo: {
     color: "#94a3b8",
