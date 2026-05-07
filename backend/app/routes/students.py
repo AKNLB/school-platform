@@ -20,6 +20,36 @@ from app.decorators import (
 
 students_bp = Blueprint("students_bp", __name__)
 
+def _parse_import_date(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+
+    # Try your existing app parser first
+    try:
+        return bridge.parse_date(raw)
+    except Exception:
+        pass
+
+    # Common spreadsheet/export formats
+    formats = [
+        "%Y-%m-%d",   # 2015-05-10
+        "%m/%d/%Y",   # 05/10/2015
+        "%m/%d/%y",   # 05/10/15
+        "%d/%m/%Y",   # 10/05/2015
+        "%d/%m/%y",   # 10/05/15
+        "%Y/%m/%d",   # 2015/05/10
+        "%m-%d-%Y",   # 05-10-2015
+        "%d-%m-%Y",   # 10-05-2015
+    ]
+
+    for fmt in formats:
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except Exception:
+            continue
+
+    raise ValueError("Invalid date")
 
 def _student_to_dict(student):
     return {
@@ -193,13 +223,13 @@ def import_students_csv(slug=None):
 
         if dob_raw:
             try:
-                dob = bridge.parse_date(dob_raw)
+                dob = _parse_import_date(dob_raw)
             except Exception:
                 skipped += 1
                 errors.append({
                     "row": index,
                     "name": name,
-                    "error": "Invalid dob. Use YYYY-MM-DD.",
+                    "error": "Invalid dob. Use YYYY-MM-DD, MM/DD/YYYY, or DD/MM/YYYY.",
                 })
                 continue
 
