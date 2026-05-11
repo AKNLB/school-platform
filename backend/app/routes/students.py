@@ -4,7 +4,7 @@ import os
 import csv
 import io
 from datetime import datetime
-
+from openpyxl import load_workbook
 from app.audit import log_audit
 import app.bridge as bridge
 from app.decorators import (
@@ -19,6 +19,47 @@ from app.decorators import (
 )
 
 students_bp = Blueprint("students_bp", __name__)
+
+def _normalize_header(value):
+    return str(value or "").strip().lower()
+
+
+def _rows_from_csv(file):
+    raw = file.read().decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(raw))
+
+    if not reader.fieldnames:
+        raise ValueError("CSV has no header row")
+
+    rows = []
+    for row in reader:
+        rows.append({str(k).strip().lower(): v for k, v in row.items() if k is not None})
+
+    return [_normalize_header(h) for h in reader.fieldnames if h], rows
+
+
+def _rows_from_xlsx(file):
+    wb = load_workbook(file, data_only=True)
+    ws = wb.active
+
+    rows_iter = list(ws.iter_rows(values_only=True))
+    if not rows_iter:
+        raise ValueError("Excel file is empty")
+
+    headers = [_normalize_header(h) for h in rows_iter[0]]
+    if not any(headers):
+        raise ValueError("Excel file has no header row")
+
+    rows = []
+    for values in rows_iter[1:]:
+        row = {}
+        for idx, header in enumerate(headers):
+            if not header:
+                continue
+            row[header] = values[idx] if idx < len(values) else ""
+        rows.append(row)
+
+    return headers, rows
 
 def _parse_import_date(value):
     raw = str(value or "").strip()
@@ -188,7 +229,7 @@ def import_students_csv(slug=None):
     errors = []
     created_students = []
 
-    for index, row in enumerate(reader, start=2):
+    for index, row in enumerate(import_rows, start=2):
         row = {str(k).strip().lower(): v for k, v in row.items() if k is not None}
 
         name = _clean_cell(row, "name")
@@ -261,6 +302,7 @@ def import_students_csv(slug=None):
         entity_label="Bulk Student Import",
         details={
             "created": created,
+            "file_type": "xlsx" if filename.endswith(".xlsx") else "csv",
             "skipped": skipped,
             "errors_count": len(errors),
             "sample_created": [

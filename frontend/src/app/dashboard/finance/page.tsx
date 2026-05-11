@@ -71,6 +71,23 @@ type CurrencyOption = {
   label: string;
 };
 
+type FinanceImportKind = "tuition" | "payment";
+
+type FinanceImportResult = {
+  message?: string;
+  kind: FinanceImportKind;
+  file_type?: string;
+  created: number;
+  updated: number;
+  skipped: number;
+  errors: Array<{
+    row?: number;
+    student_id?: number | string;
+    term?: string;
+    error: string;
+  }>;
+};
+
 const TERM_OPTIONS = ["Term 1", "Term 2", "Term 3"];
 const PAYMENT_METHODS = ["Cash", "Card", "Bank Transfer", "Mobile Money", "Cheque"];
 const PAYMENT_PLANS = ["Full", "Monthly", "Installment", "Weekly"];
@@ -133,6 +150,13 @@ export default function FinancePage() {
     reference: "",
     note: "",
   });
+
+  const [importOpen, setImportOpen] = useState(false);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importKind, setImportKind] = useState<FinanceImportKind>("tuition");
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importResult, setImportResult] = useState<FinanceImportResult | null>(null);
 
   useEffect(() => {
     void Promise.all([loadSummary(), loadStudents()]);
@@ -281,6 +305,104 @@ export default function FinancePage() {
     }
   }
 
+  function openImportFinance(kind: FinanceImportKind = "tuition") {
+    setImportKind(kind);
+    setImportFile(null);
+    setImportError(null);
+    setImportResult(null);
+    setImportOpen(true);
+  }
+
+  function closeImportFinance() {
+    if (importBusy) return;
+    setImportOpen(false);
+  }
+
+  function downloadTuitionTemplate() {
+    const csv = [
+      "student_id,term,total_amount,amount_paid,payment_plan,status",
+      "1,Term 1,500,100,Monthly,Partial",
+      "2,Term 1,500,500,Full,Paid",
+      "3,Term 1,500,0,Monthly,Unpaid",
+    ].join("\n");
+
+    downloadCsv(csv, "finance_tuition_import_template.csv");
+  }
+
+  function downloadPaymentTemplate() {
+    const csv = [
+      "student_id,term,amount,method,reference,note",
+      "1,Term 1,100,Cash,RCPT-001,First installment",
+      "2,Term 1,250,Bank Transfer,TXN-7788,Partial payment",
+      "3,Term 1,50,Mobile Money,MM-1001,Registration payment",
+    ].join("\n");
+
+    downloadCsv(csv, "finance_payment_import_template.csv");
+  }
+
+  function downloadCsv(csv: string, filename: string) {
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    URL.revokeObjectURL(url);
+  }
+
+  async function importFinanceFile() {
+    setImportError(null);
+    setImportResult(null);
+
+    if (!importFile) {
+      setImportError("Choose a CSV or Excel file first.");
+      return;
+    }
+
+    const lowerName = importFile.name.toLowerCase();
+
+    if (!lowerName.endsWith(".csv") && !lowerName.endsWith(".xlsx")) {
+      setImportError("Only CSV and Excel .xlsx files are supported.");
+      return;
+    }
+
+    setImportBusy(true);
+    setBusy(true);
+
+    try {
+      const fd = new FormData();
+      fd.append("kind", importKind);
+      fd.append("file", importFile);
+
+      const res = await api.post("/finance/import", fd);
+      const result = res.data as FinanceImportResult;
+
+      setImportResult(result);
+
+      showToast(
+        `Finance import complete: ${result.created || 0} created, ${result.updated || 0} updated, ${result.skipped || 0} skipped.`,
+        "success"
+      );
+
+      await Promise.all([loadSummary(), loadStudents()]);
+
+      if (studentId && statementTerm) {
+        await loadStudentFinance();
+      }
+    } catch (e: unknown) {
+      const message = extractErr(e, "Finance import failed.");
+      setImportError(message);
+      showToast(message, "error");
+    } finally {
+      setImportBusy(false);
+      setBusy(false);
+    }
+  }
+
   function openStatementPdf() {
     if (!studentId || !statementTerm) {
       showToast("Choose a student and term first.", "error");
@@ -409,6 +531,18 @@ export default function FinancePage() {
               style={{ ...fieldInput, width: 120 }}
               placeholder="Grade"
             />
+
+            <button onClick={downloadTuitionTemplate} style={btnSecondary} disabled={busy}>
+              Tuition Template
+            </button>
+
+            <button onClick={downloadPaymentTemplate} style={btnSecondary} disabled={busy}>
+              Payment Template
+            </button>
+
+            <button onClick={() => openImportFinance("tuition")} style={btnSecondary} disabled={busy}>
+              Import Finance
+            </button>
 
             <button onClick={() => void loadSummary()} style={btnSecondary} disabled={loading || busy}>
               Refresh
@@ -579,6 +713,12 @@ export default function FinancePage() {
                 onClick={() => setStatementTerm(term)}
               >
                 📄 Match lookup to current term
+              </button>
+              <button
+                style={quickActionBtn}
+                onClick={() => openImportFinance("payment")}
+              >
+                📥 Import payment history
               </button>
               <button
                 style={quickActionBtn}
@@ -954,6 +1094,128 @@ export default function FinancePage() {
             )}
           </Panel>
         </section>
+
+        {importOpen && (
+          <Modal title="Import Finance Records" onClose={closeImportFinance}>
+            {importError ? (
+              <div style={{ marginBottom: 12 }}>
+                <ErrorState text={importError} />
+              </div>
+            ) : null}
+
+            <div style={importIntroCard}>
+              <div style={importIntroTitle}>Bulk Finance Import</div>
+              <div style={importIntroText}>
+                Upload tuition setup records or payment history from CSV or Excel .xlsx.
+                Tuition imports update balances. Payment imports add payment rows and increase amount paid.
+              </div>
+            </div>
+
+            <div style={importGrid}>
+              <Field label="Import Type">
+                <select
+                  value={importKind}
+                  onChange={(e) => {
+                    setImportKind(e.target.value as FinanceImportKind);
+                    setImportResult(null);
+                    setImportError(null);
+                  }}
+                  style={fieldInput}
+                >
+                  <option value="tuition">Tuition Records</option>
+                  <option value="payment">Payment History</option>
+                </select>
+              </Field>
+
+              <Field label="Template">
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <button style={btnSecondary} onClick={downloadTuitionTemplate} disabled={importBusy}>
+                    Tuition CSV
+                  </button>
+                  <button style={btnSecondary} onClick={downloadPaymentTemplate} disabled={importBusy}>
+                    Payment CSV
+                  </button>
+                </div>
+              </Field>
+            </div>
+
+            <div style={importBox}>
+              <div style={importBoxTitle}>Upload File</div>
+              <div style={importBoxText}>
+                Choose a CSV or Excel .xlsx file. Required columns depend on the import type.
+                {importKind === "tuition"
+                  ? " Tuition requires: student_id, term, total_amount."
+                  : " Payments require: student_id, term, amount."}
+              </div>
+
+              <input
+                type="file"
+                accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={(e) => {
+                  const f = e.target.files?.[0] || null;
+                  setImportFile(f);
+                  setImportError(null);
+                  setImportResult(null);
+                }}
+                style={fileInput}
+              />
+
+              {importFile ? (
+                <div style={selectedFilePill}>
+                  Selected: <b>{importFile.name}</b>
+                </div>
+              ) : null}
+            </div>
+
+            {importResult ? (
+              <div style={importResultBox}>
+                <div style={importResultTitle}>Import Result</div>
+
+                <div style={importResultGrid}>
+                  <div style={importResultCard}>
+                    <div style={importResultLabel}>Created</div>
+                    <div style={importResultValue}>{importResult.created}</div>
+                  </div>
+
+                  <div style={importResultCard}>
+                    <div style={importResultLabel}>Updated</div>
+                    <div style={importResultValue}>{importResult.updated}</div>
+                  </div>
+
+                  <div style={importResultCard}>
+                    <div style={importResultLabel}>Skipped</div>
+                    <div style={importResultValue}>{importResult.skipped}</div>
+                  </div>
+                </div>
+
+                {importResult.errors?.length ? (
+                  <div style={{ marginTop: 14 }}>
+                    <div style={importNotesTitle}>Import Notes</div>
+                    <div style={importErrorList}>
+                      {importResult.errors.slice(0, 30).map((item, idx) => (
+                        <div key={`${item.row}-${idx}`} style={importErrorRow}>
+                          Row {item.row || "--"}: {item.error}
+                          {item.student_id ? ` • Student #${item.student_id}` : ""}
+                          {item.term ? ` • ${item.term}` : ""}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            <div style={modalActions}>
+              <button style={btnSecondary} onClick={closeImportFinance} disabled={importBusy}>
+                Close
+              </button>
+
+              <button style={btnPrimary} onClick={() => void importFinanceFile()} disabled={importBusy}>
+                {importBusy ? "Importing..." : "Import Finance"}
+              </button>
+            </div>
+          </Modal>
+        )}
       </div>
     </div>
   );
@@ -997,6 +1259,30 @@ function Field({
     <div style={{ display: "flex", flexDirection: "column", gap: 6, gridColumn: full ? "1 / -1" : undefined }}>
       <div style={fieldLabel}>{label}</div>
       {children}
+    </div>
+  );
+}
+
+function Modal({
+  title,
+  children,
+  onClose,
+}: {
+  title: string;
+  children: ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <div onMouseDown={onClose} style={modalOverlay}>
+      <div onMouseDown={(e) => e.stopPropagation()} style={modalCard}>
+        <div style={modalHeader}>
+          <div style={modalTitle}>{title}</div>
+          <button onClick={onClose} style={iconBtn}>
+            ✕
+          </button>
+        </div>
+        <div style={{ padding: 16 }}>{children}</div>
+      </div>
     </div>
   );
 }
@@ -1096,10 +1382,7 @@ function formatDate(value: string) {
   }
 }
 
-function extractErr(
-  e: unknown,
-  fallback: string
-) {
+function extractErr(e: unknown, fallback: string) {
   const err = e as {
     response?: { data?: { message?: string; error?: string } | string };
     message?: string;
@@ -1623,4 +1906,192 @@ const miniBtn: CSSProperties = {
 
 const inlineErrorWrap: CSSProperties = {
   marginBottom: 16,
+};
+
+const importIntroCard: CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 14,
+  border: "1px solid rgba(96,165,250,0.18)",
+  background: "rgba(96,165,250,0.08)",
+  marginBottom: 14,
+};
+
+const importIntroTitle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 900,
+  color: "#dbeafe",
+  marginBottom: 6,
+};
+
+const importIntroText: CSSProperties = {
+  fontSize: 13,
+  color: "#cbd5e1",
+  lineHeight: 1.5,
+};
+
+const importGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 12,
+  marginBottom: 14,
+};
+
+const importBox: CSSProperties = {
+  padding: 14,
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.04)",
+  marginBottom: 14,
+};
+
+const importBoxTitle: CSSProperties = {
+  fontSize: 14,
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const importBoxText: CSSProperties = {
+  marginTop: 6,
+  fontSize: 13,
+  color: "#cbd5e1",
+  lineHeight: 1.5,
+};
+
+const fileInput: CSSProperties = {
+  marginTop: 12,
+  width: "100%",
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.12)",
+  background: "rgba(15,23,42,0.85)",
+  color: "#fff",
+};
+
+const selectedFilePill: CSSProperties = {
+  marginTop: 12,
+  padding: "10px 12px",
+  borderRadius: 999,
+  border: "1px solid rgba(96,165,250,0.24)",
+  background: "rgba(96,165,250,0.12)",
+  color: "#dbeafe",
+  fontSize: 13,
+};
+
+const importResultBox: CSSProperties = {
+  padding: 14,
+  borderRadius: 14,
+  border: "1px solid rgba(34,197,94,0.18)",
+  background: "rgba(34,197,94,0.07)",
+  marginTop: 14,
+};
+
+const importResultTitle: CSSProperties = {
+  fontSize: 14,
+  fontWeight: 900,
+  color: "#bbf7d0",
+};
+
+const importResultGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(3, 1fr)",
+  gap: 10,
+  marginTop: 12,
+};
+
+const importResultCard: CSSProperties = {
+  padding: 12,
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(255,255,255,0.04)",
+};
+
+const importResultLabel: CSSProperties = {
+  fontSize: 11,
+  color: "#94a3b8",
+  fontWeight: 800,
+  textTransform: "uppercase",
+  letterSpacing: 0.6,
+};
+
+const importResultValue: CSSProperties = {
+  marginTop: 6,
+  fontSize: 24,
+  fontWeight: 950,
+  color: "#fff",
+};
+
+const importNotesTitle: CSSProperties = {
+  marginTop: 18,
+  marginBottom: 10,
+  fontSize: 14,
+  fontWeight: 900,
+  color: "#e2e8f0",
+};
+
+const importErrorList: CSSProperties = {
+  display: "grid",
+  gap: 8,
+  maxHeight: 220,
+  overflow: "auto",
+};
+
+const importErrorRow: CSSProperties = {
+  padding: "9px 10px",
+  borderRadius: 10,
+  border: "1px solid rgba(245,158,11,0.16)",
+  background: "rgba(245,158,11,0.08)",
+  color: "#fde68a",
+  fontSize: 12,
+};
+
+const modalOverlay: CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(2,6,23,0.72)",
+  display: "grid",
+  placeItems: "center",
+  padding: 16,
+  zIndex: 50,
+};
+
+const modalCard: CSSProperties = {
+  width: "min(900px, 100%)",
+  borderRadius: 18,
+  border: "1px solid rgba(255,255,255,0.12)",
+  background: "#0f172a",
+  boxShadow: "0 20px 80px rgba(0,0,0,0.55)",
+  overflow: "hidden",
+};
+
+const modalHeader: CSSProperties = {
+  padding: "14px 16px",
+  borderBottom: "1px solid rgba(255,255,255,0.10)",
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+};
+
+const modalTitle: CSSProperties = {
+  fontWeight: 900,
+  fontSize: 18,
+  color: "#fff",
+};
+
+const modalActions: CSSProperties = {
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: 10,
+  marginTop: 18,
+  flexWrap: "wrap",
+};
+
+const iconBtn: CSSProperties = {
+  width: 36,
+  height: 36,
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.12)",
+  background: "rgba(255,255,255,0.06)",
+  color: "#fff",
+  fontWeight: 900,
+  cursor: "pointer",
 };

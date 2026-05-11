@@ -377,7 +377,25 @@ export default function StudentsPage() {
     if (importBusy) return;
     setImportOpen(false);
   }
-
+  function downloadStudentExcelTemplate() {
+    const csv = [
+      "name,grade,dob,gender,email,national_id,guardian_name,guardian_contact,home_address,emergency_contact",
+      "Alice Smith,5,2015-05-10,Female,alice@example.com,,Mary Smith,mary@example.com,123 Maple Ave,mary@example.com",
+      "Bob Johnson,6,2014-08-23,Male,bob@example.com,,John Johnson,john@example.com,456 Oak St,john@example.com",
+    ].join("\n");
+  
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+  
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "student_import_template_open_in_excel.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  
+    URL.revokeObjectURL(url);
+  }
   function downloadStudentCsvTemplate() {
     const csv = [
       "name,grade,dob,gender,email,national_id,guardian_name,guardian_contact,home_address,emergency_contact",
@@ -398,6 +416,8 @@ export default function StudentsPage() {
     URL.revokeObjectURL(url);
   }
 
+
+  
   async function importStudentsCsv() {
     setImportError(null);
     setImportResult(null);
@@ -407,8 +427,10 @@ export default function StudentsPage() {
       return;
     }
 
-    if (!importFile.name.toLowerCase().endsWith(".csv")) {
-      setImportError("Only CSV files are supported right now.");
+    const lowerName = importFile.name.toLowerCase();
+
+    if (!lowerName.endsWith(".csv") && !lowerName.endsWith(".xlsx")) {
+      setImportError("Only CSV and Excel .xlsx files are supported right now.");
       return;
     }
 
@@ -1101,7 +1123,7 @@ export default function StudentsPage() {
         )}
 
         {importOpen && (
-          <Modal title="Import Students from CSV" onClose={closeImport}>
+          <Modal title="Import Students from CSV or Excel" onClose={closeImport}>
             {importError ? (
               <div style={{ marginBottom: 12 }}>
                 <ErrorState text={importError} />
@@ -1111,7 +1133,7 @@ export default function StudentsPage() {
             <div style={createIntroCard}>
               <div style={createIntroTitle}>Bulk Student Import</div>
               <div style={createIntroText}>
-                Upload a CSV file with columns like name, grade, dob, gender, email,
+                Upload a CSV or Excel .xlsx file with columns like name, grade, dob, gender, email,
                 guardian_name, guardian_contact, home_address, and emergency_contact.
                 Required columns are <b>name</b> and <b>grade</b>.
               </div>
@@ -1120,12 +1142,12 @@ export default function StudentsPage() {
             <div style={importBox}>
               <div style={importBoxTitle}>CSV File</div>
               <div style={importBoxText}>
-                Choose a UTF-8 CSV file. Duplicate students with the same name and grade will be skipped.
+                Choose a CSV or Excel .xlsx file. Duplicate students with the same name and grade will be skipped.
               </div>
 
               <input
                 type="file"
-                accept=".csv,text/csv"
+                accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 onChange={(e) => {
                   const f = e.target.files?.[0] || null;
                   setImportFile(f);

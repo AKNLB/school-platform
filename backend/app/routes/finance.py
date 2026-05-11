@@ -1,5 +1,7 @@
 from flask import Blueprint, request, jsonify, send_file
 import io
+import csv
+from openpyxl import load_workbook
 
 from app.audit import log_audit
 import app.bridge as bridge
@@ -18,6 +20,75 @@ def _money(v):
     except Exception:
         return 0.0
 
+def _clean_cell(row, key, default=""):
+    value = row.get(key, default)
+    if value is None:
+        return default
+    return str(value).strip()
+
+
+def _to_float(value):
+    try:
+        raw = str(value or "0").replace("$", "").replace(",", "").strip()
+        return float(raw or 0)
+    except Exception:
+        return 0.0
+
+
+def _normalize_header(value):
+    return str(value or "").strip().lower()
+
+
+def _rows_from_csv(file):
+    raw = file.read().decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(raw))
+
+    if not reader.fieldnames:
+        raise ValueError("CSV has no header row")
+
+    rows = []
+    for row in reader:
+        rows.append({str(k).strip().lower(): v for k, v in row.items() if k is not None})
+
+    return [_normalize_header(h) for h in reader.fieldnames if h], rows
+
+
+def _rows_from_xlsx(file):
+    wb = load_workbook(file, data_only=True)
+    ws = wb.active
+
+    rows_iter = list(ws.iter_rows(values_only=True))
+    if not rows_iter:
+        raise ValueError("Excel file is empty")
+
+    headers = [_normalize_header(h) for h in rows_iter[0]]
+    if not any(headers):
+        raise ValueError("Excel file has no header row")
+
+    rows = []
+    for values in rows_iter[1:]:
+        row = {}
+        for idx, header in enumerate(headers):
+            if not header:
+                continue
+            row[header] = values[idx] if idx < len(values) else ""
+        rows.append(row)
+
+    return headers, rows
+
+
+def _load_import_rows(file):
+    filename = (file.filename or "").lower()
+
+    if filename.endswith(".csv"):
+        headers, rows = _rows_from_csv(file)
+        return "csv", headers, rows
+
+    if filename.endswith(".xlsx"):
+        headers, rows = _rows_from_xlsx(file)
+        return "xlsx", headers, rows
+
+    raise ValueError("Only .csv and .xlsx files are supported")
 
 @finance_bp.route("/api/s/<slug>/tuition/<int:student_id>", methods=["GET"])
 @finance_bp.route("/api/tuition/<int:student_id>", methods=["GET"])
@@ -390,6 +461,210 @@ def finance_statement_export(slug=None):
         "items": items,
     }), 200
 
+@finance_bp.route("/api/s/<slug>/finance/import", methods=["POST"])
+@finance_bp.route("/api/finance/import", methods=["POST"])
+@school_context_required
+@roles_required(ROLE_ADMIN)
+@bridge.limiter.limit("10 per hour")
+def import_finance(slug=None):
+    Student = bridge.Student
+    TuitionInfo = bridge.TuitionInfo
+    PaymentHistory = bridge.PaymentHistory
+    db = bridge.db
+    sid = current_school_id()
+
+    kind = (request.form.get("kind") or "").strip().lower()
+    file = request.files.get("file")
+
+    if kind not in ("tuition", "payment"):
+        return jsonify({"error": "kind must be tuition or payment"}), 400
+
+    if not file or not file.filename:
+        return jsonify({"error": "Import file is required"}), 400
+
+    try:
+        file_type, headers, import_rows = _load_import_rows(file)
+    except UnicodeDecodeError:
+        return jsonify({"error": "Could not read CSV. Please save it as UTF-8 CSV."}), 400
+    except Exception as e:
+        return jsonify({"error": str(e) or "Could not read import file"}), 400
+
+    if kind == "tuition":
+        required = ["student_id", "term", "total_amount"]
+    else:
+        required = ["student_id", "term", "amount"]
+
+    normalized_headers = {h: h for h in headers if h}
+    missing = [h for h in required if h not in normalized_headers]
+
+    if missing:
+        return jsonify({
+            "error": f"Missing required column(s): {', '.join(missing)}",
+            "kind": kind,
+            "required_columns": required,
+            "tuition_columns": [
+                "student_id",
+                "term",
+                "total_amount",
+                "amount_paid",
+                "payment_plan",
+                "status",
+            ],
+            "payment_columns": [
+                "student_id",
+                "term",
+                "amount",
+                "method",
+                "reference",
+                "note",
+            ],
+        }), 400
+
+    created = 0
+    updated = 0
+    skipped = 0
+    errors = []
+
+    for index, row in enumerate(import_rows, start=2):
+        row = {str(k).strip().lower(): v for k, v in row.items() if k is not None}
+
+        student_id_raw = _clean_cell(row, "student_id")
+        term = _clean_cell(row, "term")
+
+        if not student_id_raw or not term:
+            skipped += 1
+            errors.append({
+                "row": index,
+                "error": "student_id and term are required",
+            })
+            continue
+
+        try:
+            student_id = int(float(student_id_raw))
+        except Exception:
+            skipped += 1
+            errors.append({
+                "row": index,
+                "student_id": student_id_raw,
+                "error": "student_id must be a number",
+            })
+            continue
+
+        student = Student.query.filter_by(
+            id=student_id,
+            school_id=sid
+        ).first()
+
+        if not student:
+            skipped += 1
+            errors.append({
+                "row": index,
+                "student_id": student_id,
+                "error": "Student not found",
+            })
+            continue
+
+        tuition = TuitionInfo.query.filter_by(
+            school_id=sid,
+            student_id=student_id,
+            term=term
+        ).first()
+
+        if kind == "tuition":
+            total_amount = _to_float(_clean_cell(row, "total_amount"))
+            amount_paid = _to_float(_clean_cell(row, "amount_paid"))
+            payment_plan = _clean_cell(row, "payment_plan") or None
+            status = _clean_cell(row, "status") or None
+
+            if not tuition:
+                tuition = TuitionInfo(
+                    school_id=sid,
+                    student_id=student_id,
+                    term=term,
+                    total_amount=total_amount,
+                    amount_paid=amount_paid,
+                    payment_plan=payment_plan,
+                    status=status,
+                )
+                db.session.add(tuition)
+                created += 1
+            else:
+                tuition.total_amount = total_amount
+                tuition.amount_paid = amount_paid
+                tuition.payment_plan = payment_plan
+                tuition.status = status
+                updated += 1
+
+        else:
+            amount = _to_float(_clean_cell(row, "amount"))
+            method = _clean_cell(row, "method") or None
+            reference = _clean_cell(row, "reference") or None
+            note = _clean_cell(row, "note") or None
+
+            if amount <= 0:
+                skipped += 1
+                errors.append({
+                    "row": index,
+                    "student_id": student_id,
+                    "term": term,
+                    "error": "amount must be greater than 0",
+                })
+                continue
+
+            if not tuition:
+                tuition = TuitionInfo(
+                    school_id=sid,
+                    student_id=student_id,
+                    term=term,
+                    total_amount=0,
+                    amount_paid=0,
+                    payment_plan=None,
+                    status=None,
+                )
+                db.session.add(tuition)
+                db.session.flush()
+                created += 1
+
+            payment = PaymentHistory(
+                school_id=sid,
+                tuition_id=tuition.id,
+                amount=amount,
+                method=method,
+                reference=reference,
+                note=note,
+            )
+            db.session.add(payment)
+
+            tuition.amount_paid = float(tuition.amount_paid or 0) + amount
+            updated += 1
+
+    db.session.commit()
+
+    log_audit(
+        module="finance",
+        action="bulk_import",
+        entity_type="finance_import",
+        entity_id=None,
+        entity_label="Bulk Finance Import",
+        details={
+            "kind": kind,
+            "file_type": file_type,
+            "created": created,
+            "updated": updated,
+            "skipped": skipped,
+            "errors_count": len(errors),
+        },
+    )
+
+    return jsonify({
+        "message": "Finance import completed",
+        "kind": kind,
+        "file_type": file_type,
+        "created": created,
+        "updated": updated,
+        "skipped": skipped,
+        "errors": errors[:100],
+    }), 200
 
 @finance_bp.route("/api/s/<slug>/payments/<int:payment_id>/receipt.pdf", methods=["GET"])
 @finance_bp.route("/api/payments/<int:payment_id>/receipt/pdf", methods=["GET"])
