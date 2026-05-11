@@ -1,6 +1,6 @@
 "use client";
 
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { useToast } from "@/components/ui/ToastProvider";
@@ -28,6 +28,20 @@ type AttendanceRecord = {
   grade?: number;
   status: AttendanceStatus;
   note?: string;
+};
+
+type AttendanceImportResult = {
+  message?: string;
+  file_type?: string;
+  created: number;
+  updated: number;
+  skipped: number;
+  errors: Array<{
+    row?: number;
+    student_id?: number | string;
+    date?: string;
+    error: string;
+  }>;
 };
 
 type RowState = {
@@ -64,6 +78,12 @@ export default function AttendancePage() {
   const [sortBy, setSortBy] = useState<"name" | "grade" | "status">("name");
 
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importResult, setImportResult] = useState<AttendanceImportResult | null>(null);
+
 
   async function loadAll(showRefresh = false) {
     try {
@@ -263,6 +283,81 @@ export default function AttendancePage() {
     }
   }
 
+
+  function openImportAttendance() {
+    setImportOpen(true);
+    setImportFile(null);
+    setImportError(null);
+    setImportResult(null);
+  }
+
+  function closeImportAttendance() {
+    if (importBusy) return;
+    setImportOpen(false);
+  }
+
+  function downloadAttendanceTemplate() {
+    const csv = [
+      "student_id,date,status,note",
+      `1,${selectedDate},present,`,
+      `2,${selectedDate},absent,Sick`,
+      `3,${selectedDate},late,Arrived after assembly`,
+      `4,${selectedDate},excused,Approved absence`,
+    ].join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "attendance_import_template.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    URL.revokeObjectURL(url);
+  }
+
+  async function importAttendanceFile() {
+    setImportError(null);
+    setImportResult(null);
+
+    if (!importFile) {
+      setImportError("Choose a CSV or Excel file first.");
+      return;
+    }
+
+    const lowerName = importFile.name.toLowerCase();
+    if (!lowerName.endsWith(".csv") && !lowerName.endsWith(".xlsx")) {
+      setImportError("Only CSV and Excel .xlsx files are supported.");
+      return;
+    }
+
+    setImportBusy(true);
+
+    try {
+      const fd = new FormData();
+      fd.append("file", importFile);
+
+      const res = await api.post("/attendance/import", fd);
+      const result = res.data as AttendanceImportResult;
+
+      setImportResult(result);
+      showToast(
+        `Attendance import complete: ${result.created || 0} created, ${result.updated || 0} updated, ${result.skipped || 0} skipped.`,
+        "success"
+      );
+
+      await loadAll(true);
+    } catch (e: unknown) {
+      const message = extractErr(e, "Attendance import failed.");
+      setImportError(message);
+      showToast(message, "error");
+    } finally {
+      setImportBusy(false);
+    }
+  }
+
   if (loading) {
     return (
       <div style={pageShell}>
@@ -313,6 +408,22 @@ export default function AttendancePage() {
                 disabled={loading || refreshing || saving}
               >
                 {refreshing ? "Refreshing..." : "Refresh"}
+              </button>
+
+              <button
+                onClick={downloadAttendanceTemplate}
+                style={btnSecondary}
+                disabled={loading || refreshing || saving}
+              >
+                Download Template
+              </button>
+
+              <button
+                onClick={openImportAttendance}
+                style={btnSecondary}
+                disabled={loading || refreshing || saving}
+              >
+                Import Attendance
               </button>
 
               <button
@@ -630,6 +741,103 @@ export default function AttendancePage() {
           )}
         </section>
 
+        {importOpen && (
+          <Modal title="Import Attendance" onClose={closeImportAttendance}>
+            {importError ? (
+              <div style={{ marginBottom: 12 }}>
+                <ErrorState text={importError} />
+              </div>
+            ) : null}
+
+            <div style={importIntroCard}>
+              <div style={importIntroTitle}>Bulk Attendance Import</div>
+              <div style={importIntroText}>
+                Upload a CSV or Excel .xlsx file with student_id, date, status, and optional note.
+                Allowed statuses are present, absent, late, and excused. Existing records for the
+                same student and date will be updated.
+              </div>
+            </div>
+
+            <div style={importBox}>
+              <div style={importBoxTitle}>Upload File</div>
+              <div style={importBoxText}>
+                Required columns: <b>student_id</b>, <b>date</b>, and <b>status</b>.
+                Optional column: <b>note</b>. Dates may be YYYY-MM-DD, MM/DD/YYYY, or DD/MM/YYYY.
+              </div>
+
+              <input
+                type="file"
+                accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={(e) => {
+                  const f = e.target.files?.[0] || null;
+                  setImportFile(f);
+                  setImportError(null);
+                  setImportResult(null);
+                }}
+                style={fileInput}
+              />
+
+              {importFile ? (
+                <div style={selectedFilePill}>
+                  Selected: <b>{importFile.name}</b>
+                </div>
+              ) : null}
+            </div>
+
+            {importResult ? (
+              <div style={importResultBox}>
+                <div style={importResultTitle}>Import Result</div>
+
+                <div style={importResultGrid}>
+                  <div style={importResultCard}>
+                    <div style={importResultLabel}>Created</div>
+                    <div style={importResultValue}>{importResult.created}</div>
+                  </div>
+
+                  <div style={importResultCard}>
+                    <div style={importResultLabel}>Updated</div>
+                    <div style={importResultValue}>{importResult.updated}</div>
+                  </div>
+
+                  <div style={importResultCard}>
+                    <div style={importResultLabel}>Skipped</div>
+                    <div style={importResultValue}>{importResult.skipped}</div>
+                  </div>
+                </div>
+
+                {importResult.errors?.length ? (
+                  <div style={{ marginTop: 14 }}>
+                    <div style={importNotesTitle}>Import Notes</div>
+                    <div style={importErrorList}>
+                      {importResult.errors.slice(0, 30).map((item, idx) => (
+                        <div key={`${item.row}-${idx}`} style={importErrorRow}>
+                          Row {item.row || "--"}: {item.error}
+                          {item.student_id ? ` • Student #${item.student_id}` : ""}
+                          {item.date ? ` • ${item.date}` : ""}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            <div style={modalActions}>
+              <button style={btnSecondary} onClick={downloadAttendanceTemplate} disabled={importBusy}>
+                Download Template
+              </button>
+
+              <button style={btnSecondary} onClick={closeImportAttendance} disabled={importBusy}>
+                Close
+              </button>
+
+              <button style={btnPrimary} onClick={() => void importAttendanceFile()} disabled={importBusy}>
+                {importBusy ? "Importing..." : "Import Attendance"}
+              </button>
+            </div>
+          </Modal>
+        )}
+
         <ConfirmModal
           open={resetConfirmOpen}
           title="Reset attendance changes"
@@ -718,6 +926,30 @@ function ActiveChip({ label, onRemove }: { label: string; onRemove: () => void }
       <button onClick={onRemove} style={activeChipBtn}>
         ✕
       </button>
+    </div>
+  );
+}
+
+function Modal({
+  title,
+  children,
+  onClose,
+}: {
+  title: string;
+  children: ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <div onMouseDown={onClose} style={modalOverlay}>
+      <div onMouseDown={(e) => e.stopPropagation()} style={modalCard}>
+        <div style={modalHeader}>
+          <div style={modalTitle}>{title}</div>
+          <button onClick={onClose} style={iconBtn}>
+            ✕
+          </button>
+        </div>
+        <div style={{ padding: 16 }}>{children}</div>
+      </div>
     </div>
   );
 }
@@ -1318,4 +1550,185 @@ const noteInput: CSSProperties = {
 
 const inlineErrorWrap: CSSProperties = {
   marginBottom: 16,
+};
+
+const importIntroCard: CSSProperties = {
+  padding: "12px 14px",
+  borderRadius: 14,
+  border: "1px solid rgba(96,165,250,0.18)",
+  background: "rgba(96,165,250,0.08)",
+  marginBottom: 14,
+};
+
+const importIntroTitle: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 900,
+  color: "#dbeafe",
+  marginBottom: 6,
+};
+
+const importIntroText: CSSProperties = {
+  fontSize: 13,
+  color: "#cbd5e1",
+  lineHeight: 1.5,
+};
+
+const importBox: CSSProperties = {
+  padding: 14,
+  borderRadius: 14,
+  border: "1px solid rgba(255,255,255,0.10)",
+  background: "rgba(255,255,255,0.04)",
+  marginBottom: 14,
+};
+
+const importBoxTitle: CSSProperties = {
+  fontSize: 14,
+  fontWeight: 900,
+  color: "#fff",
+};
+
+const importBoxText: CSSProperties = {
+  marginTop: 6,
+  fontSize: 13,
+  color: "#cbd5e1",
+  lineHeight: 1.5,
+};
+
+const fileInput: CSSProperties = {
+  marginTop: 12,
+  width: "100%",
+  padding: "12px 14px",
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.12)",
+  background: "rgba(15,23,42,0.85)",
+  color: "#fff",
+};
+
+const selectedFilePill: CSSProperties = {
+  marginTop: 12,
+  padding: "10px 12px",
+  borderRadius: 999,
+  border: "1px solid rgba(96,165,250,0.24)",
+  background: "rgba(96,165,250,0.12)",
+  color: "#dbeafe",
+  fontSize: 13,
+};
+
+const importResultBox: CSSProperties = {
+  padding: 14,
+  borderRadius: 14,
+  border: "1px solid rgba(34,197,94,0.18)",
+  background: "rgba(34,197,94,0.07)",
+  marginTop: 14,
+};
+
+const importResultTitle: CSSProperties = {
+  fontSize: 14,
+  fontWeight: 900,
+  color: "#bbf7d0",
+};
+
+const importResultGrid: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(3, 1fr)",
+  gap: 10,
+  marginTop: 12,
+};
+
+const importResultCard: CSSProperties = {
+  padding: 12,
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.08)",
+  background: "rgba(255,255,255,0.04)",
+};
+
+const importResultLabel: CSSProperties = {
+  fontSize: 11,
+  color: "#94a3b8",
+  fontWeight: 800,
+  textTransform: "uppercase",
+  letterSpacing: 0.6,
+};
+
+const importResultValue: CSSProperties = {
+  marginTop: 6,
+  fontSize: 24,
+  fontWeight: 950,
+  color: "#fff",
+};
+
+const importNotesTitle: CSSProperties = {
+  marginTop: 18,
+  marginBottom: 10,
+  fontSize: 14,
+  fontWeight: 900,
+  color: "#e2e8f0",
+};
+
+const importErrorList: CSSProperties = {
+  display: "grid",
+  gap: 8,
+  maxHeight: 220,
+  overflow: "auto",
+};
+
+const importErrorRow: CSSProperties = {
+  padding: "9px 10px",
+  borderRadius: 10,
+  border: "1px solid rgba(245,158,11,0.16)",
+  background: "rgba(245,158,11,0.08)",
+  color: "#fde68a",
+  fontSize: 12,
+};
+
+const modalOverlay: CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(2,6,23,0.72)",
+  display: "grid",
+  placeItems: "center",
+  padding: 16,
+  zIndex: 50,
+};
+
+const modalCard: CSSProperties = {
+  width: "min(900px, 100%)",
+  borderRadius: 18,
+  border: "1px solid rgba(255,255,255,0.12)",
+  background: "#0f172a",
+  boxShadow: "0 20px 80px rgba(0,0,0,0.55)",
+  overflow: "hidden",
+};
+
+const modalHeader: CSSProperties = {
+  padding: "14px 16px",
+  borderBottom: "1px solid rgba(255,255,255,0.10)",
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+};
+
+const modalTitle: CSSProperties = {
+  fontWeight: 900,
+  fontSize: 18,
+  color: "#fff",
+};
+
+const modalActions: CSSProperties = {
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: 10,
+  marginTop: 18,
+  flexWrap: "wrap",
+};
+
+const iconBtn: CSSProperties = {
+  width: 36,
+  height: 36,
+  borderRadius: 12,
+  border: "1px solid rgba(255,255,255,0.12)",
+  background: "rgba(255,255,255,0.06)",
+  color: "#fff",
+  fontWeight: 900,
+  cursor: "pointer",
 };
